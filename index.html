@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>注音符號互動拼音教學板</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Noto Sans TC -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700;900&family=Nunito:wght@700&display=swap" rel="stylesheet">
+  
+  <style>
+    * {
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body {
+      font-family: 'Noto Sans TC', 'Nunito', -apple-system, sans-serif;
+      background-color: #f0f4f8;
+    }
+    .zhuyin-font {
+      font-family: 'Noto Sans TC', sans-serif;
+      font-weight: 700;
+    }
+    /* Dragging clone element styling */
+    .dragging-ghost {
+      position: fixed;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(-50%, -50%) scale(1.15);
+      box-shadow: 0 15px 25px -5px rgba(0, 0, 0, 0.3);
+      opacity: 0.92;
+      transition: transform 0.05s ease;
+    }
+    /* Slot pulse highlight */
+    .slot-hover {
+      border-color: #3b82f6 !important;
+      background-color: #dbeafe !important;
+      transform: scale(1.04);
+    }
+    /* Audio speaking glowing animation */
+    .speaking-glow {
+      animation: pulse-border 0.8s infinite alternate;
+      box-shadow: 0 0 20px 4px rgba(234, 88, 12, 0.7) !important;
+    }
+    @keyframes pulse-border {
+      from { transform: scale(1); }
+      to { transform: scale(1.08); }
+    }
+    /* Custom scrollbar for symbol drawer */
+    ::-webkit-scrollbar {
+      height: 8px;
+      width: 8px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-800 flex flex-col justify-between overflow-x-hidden p-2 sm:p-4">
+
+  <header class="w-full max-w-7xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-3 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center space-x-3">
+      <span class="text-3xl sm:text-4xl">🎒</span>
+      <div>
+        <h1 class="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 tracking-wide flex items-center gap-2">
+          注音符號互動拼音板
+          <span class="text-xs sm:text-sm font-semibold px-2.5 py-1 bg-amber-100 text-amber-800 rounded-full border border-amber-200">教學大屏／平板版</span>
+        </h1>
+        <p class="text-xs sm:text-sm text-slate-500 hidden sm:block">拖動或點擊注音放入目標格，點擊拼音鍵啟動台灣女音示範！</p>
+      </div>
+    </div>
+
+    <!-- Voice and Screen controls -->
+    <div class="flex items-center gap-2">
+      <!-- Voice status badge -->
+      <div id="voice-indicator" class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+        <span id="voice-label">搜尋台灣語音中...</span>
+      </div>
+
+      <!-- Fullscreen Toggle Button -->
+      <button id="fullscreen-btn" class="p-2.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 rounded-xl font-medium text-xs sm:text-sm flex items-center gap-1 transition" title="全螢幕切換">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+        </svg>
+        <span class="hidden md:inline">全螢幕</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="w-full max-w-7xl mx-auto flex-1 flex flex-col gap-3">
+    
+    <!-- Top Display: Target Slots + Combined Results + Spell Controls -->
+    <section class="bg-white rounded-3xl p-3 sm:p-5 shadow-sm border border-slate-200">
+      
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+        
+        <!-- Left: Target Drop Slots Area (直式注音板：仿教材直式排列) -->
+        <div class="lg:col-span-6 bg-slate-50 border-2 border-dashed border-slate-300 rounded-3xl p-3 sm:p-4 flex flex-col justify-between">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs sm:text-sm font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+              <span>📐</span> 直式注音組合格（同教材排版）
+            </span>
+            <span class="text-[11px] sm:text-xs text-slate-400">聲符在上、介音在中、韻符在下、聲調在右</span>
+          </div>
+
+          <!-- Vertical Slots Layout: Main column (聲、介、韻) + Right column (聲調) -->
+          <div class="flex items-center justify-center gap-4 sm:gap-6 py-2">
+            
+            <!-- Left Main Column: 聲符 -> 介音 -> 韻符 (直式由上至下) -->
+            <div class="flex flex-col gap-2 sm:gap-3 items-center">
+              
+              <!-- Slot 1: 聲符 (Initial) -->
+              <div class="target-slot flex items-center gap-2 sm:gap-3" data-type="initial">
+                <span class="text-xs sm:text-sm font-bold text-blue-700 bg-blue-100 px-2.5 py-1 rounded-lg w-16 sm:w-20 text-center shadow-sm">1. 聲符</span>
+                <div class="slot-box relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl border-4 border-dashed border-blue-300 bg-blue-50/60 flex items-center justify-center cursor-pointer transition-all duration-150 shadow-inner group">
+                  <span class="slot-placeholder text-2xl sm:text-3xl text-blue-300 font-black select-none pointer-events-none">+</span>
+                  <span class="slot-symbol hidden text-3xl sm:text-5xl font-black text-blue-700 zhuyin-font"></span>
+                  <button class="slot-clear-btn hidden absolute -top-1.5 -right-1.5 bg-rose-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow hover:bg-rose-600 transition" title="移除此符號">✕</button>
+                </div>
+              </div>
+
+              <!-- Slot 2: 介音 (Medial) -->
+              <div class="target-slot flex items-center gap-2 sm:gap-3" data-type="medial">
+                <span class="text-xs sm:text-sm font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-lg w-16 sm:w-20 text-center shadow-sm">2. 介音</span>
+                <div class="slot-box relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl border-4 border-dashed border-emerald-300 bg-emerald-50/60 flex items-center justify-center cursor-pointer transition-all duration-150 shadow-inner group">
+                  <span class="slot-placeholder text-2xl sm:text-3xl text-emerald-300 font-black select-none pointer-events-none">+</span>
+                  <span class="slot-symbol hidden text-3xl sm:text-5xl font-black text-emerald-700 zhuyin-font"></span>
+                  <button class="slot-clear-btn hidden absolute -top-1.5 -right-1.5 bg-rose-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow hover:bg-rose-600 transition" title="移除此符號">✕</button>
+                </div>
+              </div>
+
+              <!-- Slot 3: 韻符 (Final) -->
+              <div class="target-slot flex items-center gap-2 sm:gap-3" data-type="final">
+                <span class="text-xs sm:text-sm font-bold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-lg w-16 sm:w-20 text-center shadow-sm">3. 韻符</span>
+                <div class="slot-box relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl border-4 border-dashed border-amber-300 bg-amber-50/60 flex items-center justify-center cursor-pointer transition-all duration-150 shadow-inner group">
+                  <span class="slot-placeholder text-2xl sm:text-3xl text-amber-300 font-black select-none pointer-events-none">+</span>
+                  <span class="slot-symbol hidden text-3xl sm:text-5xl font-black text-amber-700 zhuyin-font"></span>
+                  <button class="slot-clear-btn hidden absolute -top-1.5 -right-1.5 bg-rose-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow hover:bg-rose-600 transition" title="移除此符號">✕</button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Right Column: 聲調 (Tone) - 仿國語教材標注於字音右側 -->
+            <div class="flex flex-col items-center justify-center pl-3 sm:pl-5 border-l-2 border-dashed border-slate-200">
+              <div class="target-slot flex flex-col items-center gap-2" data-type="tone">
+                <span class="text-xs sm:text-sm font-bold text-purple-700 bg-purple-100 px-2.5 py-1 rounded-lg text-center shadow-sm">4. 聲調</span>
+                <div class="slot-box relative w-16 h-28 sm:w-20 sm:h-36 rounded-2xl border-4 border-dashed border-purple-300 bg-purple-50/60 flex flex-col items-center justify-center cursor-pointer transition-all duration-150 shadow-inner group">
+                  <span class="slot-placeholder text-2xl sm:text-3xl text-purple-300 font-black select-none pointer-events-none">+</span>
+                  <span class="slot-symbol hidden text-3xl sm:text-5xl font-black text-purple-700 zhuyin-font"></span>
+                  <button class="slot-clear-btn hidden absolute -top-1.5 -right-1.5 bg-rose-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow hover:bg-rose-600 transition" title="移除此符號">✕</button>
+                </div>
+                <span class="text-[10px] text-purple-500 font-medium">標注在右側</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Right: Spelling Trigger Buttons and Combined Result Display -->
+        <div class="lg:col-span-6 flex flex-col gap-3 justify-between">
+          
+          <!-- Combined Pronunciation Preview Card (Clickable to speak current combined sound) -->
+          <div id="card-combined-sound" class="bg-gradient-to-br from-indigo-500 via-purple-600 to-indigo-700 hover:from-indigo-600 hover:via-purple-700 hover:to-indigo-800 text-white rounded-2xl p-4 shadow-md flex items-center justify-between min-h-[105px] cursor-pointer active:scale-[0.99] transition-all group select-none" title="點擊直接朗讀當前字音">
+            <div class="flex flex-col">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-indigo-200 font-semibold">當前拼音組合</span>
+                <span class="text-[10px] px-2 py-0.5 rounded-full bg-white/20 text-white font-medium flex items-center gap-1 group-hover:bg-white/30 transition">
+                  <span>🔊</span> 點此朗讀
+                </span>
+              </div>
+              <div class="flex items-baseline gap-2 mt-1">
+                <span id="display-combined" class="text-3xl sm:text-4xl font-black tracking-widest zhuyin-font">（尚未放入符號）</span>
+              </div>
+              <span id="display-tone-desc" class="text-xs text-indigo-200 mt-1">請由下方挑選注音符號放入上方格子，或點此聽發音</span>
+            </div>
+            
+            <!-- Dynamic Speaking Status Badge -->
+            <div id="speaker-status-box" class="hidden flex-col items-center justify-center bg-white/20 backdrop-blur-md px-3 py-2 rounded-xl border border-white/30">
+              <span class="text-2xl animate-bounce">📢</span>
+              <span id="speech-subtext" class="text-[11px] font-bold text-white mt-1">正在朗讀</span>
+            </div>
+          </div>
+
+          <!-- Spelling Control Buttons -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            
+            <!-- Mode 1: 3-step or direct spell -->
+            <button id="btn-spell-mode1" class="relative group overflow-hidden px-4 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-2xl font-bold shadow-md active:scale-98 transition flex items-center justify-center gap-2">
+              <span class="text-xl">🗣️</span>
+              <div class="text-left">
+                <div class="text-sm sm:text-base leading-tight">拼法一：逐音直拼</div>
+                <div class="text-[11px] text-blue-200 leading-tight">ㄅ ➔ ㄧ ➔ ㄥ ➔ ㄅㄧㄥˇ</div>
+              </div>
+            </button>
+
+            <!-- Mode 2: combined final spell -->
+            <button id="btn-spell-mode2" class="relative group overflow-hidden px-4 py-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-2xl font-bold shadow-md active:scale-98 transition flex items-center justify-center gap-2">
+              <span class="text-xl">🎶</span>
+              <div class="text-left">
+                <div class="text-sm sm:text-base leading-tight">拼法二：結合韻拼</div>
+                <div class="text-[11px] text-emerald-200 leading-tight">ㄅ ➔ ㄧㄥˇ ➔ ㄅㄧㄥˇ</div>
+              </div>
+            </button>
+
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+    <section class="bg-white rounded-3xl p-3 sm:p-5 shadow-sm border border-slate-200 flex-1 flex flex-col gap-3">
+      
+      <div class="flex items-center justify-between border-b border-slate-100 pb-2 flex-wrap gap-2">
+        <h2 class="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
+          <span>📚</span>
+          <span>注音符號庫存區</span>
+          <span class="text-xs font-normal text-slate-400 hidden sm:inline">（支援手指滑動拖曳，亦可直接點擊自動歸位）</span>
+        </h2>
+        <div class="flex items-center gap-2">
+          <!-- Reset Board Button -->
+          <button id="reset-all-btn" class="px-3 sm:px-4 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-sm active:scale-95 transition">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <span>重置全部</span>
+          </button>
+          <span class="text-xs font-semibold px-2 py-1 bg-slate-100 text-slate-600 rounded-lg">共 37 符號 + 5 聲調</span>
+        </div>
+      </div>
+
+      <!-- Categories Layout: 4 Colored Sections -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1">
+        
+        <!-- 1. 聲符 (21個) -->
+        <div class="lg:col-span-5 bg-blue-50/70 border border-blue-200 rounded-2xl p-2 sm:p-3 flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs sm:text-sm font-black text-blue-800 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block"></span>
+              聲符（21個）
+            </span>
+            <span class="text-[11px] text-blue-500">按住拖曳或點選</span>
+          </div>
+          <div id="pool-initials" class="grid grid-cols-7 sm:grid-cols-7 gap-1.5 sm:gap-2 flex-1 items-start">
+            <!-- Populated by JS: ㄅ ㄆ ㄇ ㄈ ㄉ ㄊ ㄋ ㄌ ㄍ ㄎ ㄏ ㄐ ㄑ ㄒ ㄓ ㄔ ㄕ ㄖ ㄗ ㄘ ㄙ -->
+          </div>
+        </div>
+
+        <!-- 2. 介音 (3個) -->
+        <div class="lg:col-span-2 bg-emerald-50/70 border border-emerald-200 rounded-2xl p-2 sm:p-3 flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs sm:text-sm font-black text-emerald-800 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block"></span>
+              介音（3個）
+            </span>
+          </div>
+          <div id="pool-medials" class="grid grid-cols-3 sm:grid-cols-3 gap-1.5 sm:gap-2 flex-1 items-start">
+            <!-- Populated by JS: ㄧ ㄨ ㄩ -->
+          </div>
+        </div>
+
+        <!-- 3. 韻符 (13個) -->
+        <div class="lg:col-span-3 bg-amber-50/70 border border-amber-200 rounded-2xl p-2 sm:p-3 flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs sm:text-sm font-black text-amber-800 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-600 inline-block"></span>
+              韻符（13個）
+            </span>
+          </div>
+          <div id="pool-finals" class="grid grid-cols-4 sm:grid-cols-5 gap-1.5 sm:gap-2 flex-1 items-start">
+            <!-- Populated by JS: ㄚ ㄛ ㄜ ㄝ ㄞ ㄟ ㄠ ㄡ ㄢ ㄣ ㄤ ㄥ ㄦ -->
+          </div>
+        </div>
+
+        <!-- 4. 聲調 (5種) -->
+        <div class="lg:col-span-2 bg-purple-50/70 border border-purple-200 rounded-2xl p-2 sm:p-3 flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs sm:text-sm font-black text-purple-800 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-purple-600 inline-block"></span>
+              聲調（5種）
+            </span>
+          </div>
+          <div id="pool-tones" class="grid grid-cols-2 sm:grid-cols-2 gap-1.5 sm:gap-2 flex-1 items-start">
+            <!-- Populated by JS: 一聲(無), 二聲(ˊ), 三聲(ˇ), 四聲(ˋ), 輕聲(˙) -->
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="w-full max-w-7xl mx-auto mt-2 text-center text-xs text-slate-400 py-1">
+    注音符號互動拼音教學板 • 支援觸控平板與大屏電子白板 • 可部署於 GitHub Pages
+  </footer>
+
+  <!-- Toast Notification Box -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-sm text-white text-sm px-4 py-2 rounded-xl shadow-lg opacity-0 pointer-events-none transition-opacity duration-200 z-50">
+    提示訊息
+  </div>
+
+  <script>
+    const BOPOMOFO_DATA = {
+      initials: [
+        'ㄅ', 'ㄆ', 'ㄇ', 'ㄈ', 
+        'ㄉ', 'ㄊ', 'ㄋ', 'ㄌ', 
+        'ㄍ', 'ㄎ', 'ㄏ', 
+        'ㄐ', 'ㄑ', 'ㄒ', 
+        'ㄓ', 'ㄔ', 'ㄕ', 'ㄖ', 
+        'ㄗ', 'ㄘ', 'ㄙ'
+      ],
+      medials: ['ㄧ', 'ㄨ', 'ㄩ'],
+      finals: [
+        'ㄚ', 'ㄛ', 'ㄜ', 'ㄝ', 
+        'ㄞ', 'ㄟ', 'ㄠ', 'ㄡ', 
+        'ㄢ', 'ㄣ', 'ㄤ', 'ㄥ', 
+        'ㄦ'
+      ],
+      tones: [
+        { label: '一聲 (陰平)', symbol: 'ˉ', value: 'ˉ', name: '一聲' },
+        { label: '二聲 (陽平)', symbol: 'ˊ', value: 'ˊ', name: '二聲' },
+        { label: '三聲 (上聲)', symbol: 'ˇ', value: 'ˇ', name: '三聲' },
+        { label: '四聲 (去聲)', symbol: 'ˋ', value: 'ˋ', name: '四聲' },
+        { label: '輕聲', symbol: '˙', value: '˙', name: '輕聲' }
+      ]
+    };
+
+    const state = {
+      slots: {
+        initial: '', // 聲符
+        medial: '',  // 介音
+        final: '',   // 韻符
+        tone: null   // 聲調物件或 null（避免空字串混淆一聲）
+      },
+      isSpeaking: false,
+      selectedVoice: null
+    };
+
+    function initSpeechEngine() {
+      const voiceLabel = document.getElementById('voice-label');
+      const voiceIndicator = document.getElementById('voice-indicator');
+
+      function updateVoiceList() {
+        if (!('speechSynthesis' in window)) {
+          voiceLabel.textContent = '此瀏覽器不支援語音';
+          voiceIndicator.className = 'px-3 py-1.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-semibold';
+          return;
+        }
+
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length === 0) return;
+
+        // 搜尋優先順序:
+        // 1. Google 國語 (臺灣)
+        // 2. 任何 zh-TW 語系且名稱含 "Female" 或 "女" 或 "HanHan" 或 "Mei-Jia"
+        // 3. 任何 zh-TW 語系
+        // 4. zh-HK / zh-CN 備援
+        let targetVoice = voices.find(v => (v.lang === 'zh-TW' || v.lang === 'zh_TW') && (v.name.includes('Google') || v.name.includes('國語')));
+        
+        if (!targetVoice) {
+          targetVoice = voices.find(v => (v.lang === 'zh-TW' || v.lang === 'zh_TW') && (v.name.includes('女') || v.name.toLowerCase().includes('female') || v.name.includes('Mei-Jia') || v.name.includes('HanHan')));
+        }
+        if (!targetVoice) {
+          targetVoice = voices.find(v => v.lang === 'zh-TW' || v.lang === 'zh_TW');
+        }
+        if (!targetVoice) {
+          targetVoice = voices.find(v => v.lang.startsWith('zh'));
+        }
+
+        if (targetVoice) {
+          state.selectedVoice = targetVoice;
+          voiceLabel.textContent = `語音已就緒 (${targetVoice.name.replace('Google', '').trim() || '國語'})`;
+          voiceIndicator.className = 'flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-semibold';
+        } else {
+          voiceLabel.textContent = '預設語音模式';
+        }
+      }
+
+      updateVoiceList();
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.onvoiceschanged = updateVoiceList;
+      }
+    }
+
+    /* Helper: Single phrase speak with Promise */
+    function speakText(text, rate = 0.85, pitch = 1.05) {
+      return new Promise((resolve) => {
+        if (!('speechSynthesis' in window)) {
+          resolve();
+          return;
+        }
+
+        // Cancel previous speech if needed
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        if (state.selectedVoice) {
+          utterance.voice = state.selectedVoice;
+        }
+        utterance.lang = 'zh-TW';
+        utterance.rate = rate; // 稍慢節奏，適合教學示範
+        utterance.pitch = pitch;
+
+        utterance.onend = () => resolve();
+        utterance.onerror = () => resolve();
+
+        window.speechSynthesis.speak(utterance);
+      });
+    }
+
+    /* Helper: Pause delay */
+    function wait(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+
+    function renderSymbolPools() {
+      // 1. Initials (聲符)
+      const initialsContainer = document.getElementById('pool-initials');
+      initialsContainer.innerHTML = '';
+      BOPOMOFO_DATA.initials.forEach(sym => {
+        const btn = createSymbolCard(sym, 'initial', 'bg-white hover:bg-blue-100 text-blue-900 border-blue-200');
+        initialsContainer.appendChild(btn);
+      });
+
+      // 2. Medials (介音)
+      const medialsContainer = document.getElementById('pool-medials');
+      medialsContainer.innerHTML = '';
+      BOPOMOFO_DATA.medials.forEach(sym => {
+        const btn = createSymbolCard(sym, 'medial', 'bg-white hover:bg-emerald-100 text-emerald-900 border-emerald-200');
+        medialsContainer.appendChild(btn);
+      });
+
+      // 3. Finals (韻符)
+      const finalsContainer = document.getElementById('pool-finals');
+      finalsContainer.innerHTML = '';
+      BOPOMOFO_DATA.finals.forEach(sym => {
+        const btn = createSymbolCard(sym, 'final', 'bg-white hover:bg-amber-100 text-amber-900 border-amber-200');
+        finalsContainer.appendChild(btn);
+      });
+
+      // 4. Tones (聲調)
+      const tonesContainer = document.getElementById('pool-tones');
+      tonesContainer.innerHTML = '';
+      BOPOMOFO_DATA.tones.forEach(t => {
+        const btn = document.createElement('div');
+        btn.className = `symbol-card cursor-grab active:cursor-grabbing select-none flex flex-col items-center justify-center p-2 rounded-xl bg-white hover:bg-purple-100 text-purple-950 border border-purple-200 shadow-sm active:scale-95 transition-all`;
+        btn.dataset.type = 'tone';
+        btn.dataset.symbol = t.value;
+        btn.dataset.name = t.name;
+        
+        btn.innerHTML = `
+          <span class="text-2xl sm:text-3xl font-black zhuyin-font leading-tight">${t.symbol}</span>
+          <span class="text-[11px] font-semibold text-purple-700 mt-0.5">${t.name}</span>
+        `;
+        setupPointerDrag(btn);
+        btn.addEventListener('click', () => {
+          setSlotValue('tone', t.value, t.name);
+          // 朗讀該聲調名稱 (如: "一聲"、"三聲")
+          speakText(t.name, 0.95);
+          showToast(`已設定聲調：${t.name}`);
+        });
+        tonesContainer.appendChild(btn);
+      });
+    }
+
+    /* Helper to create generic symbol card */
+    function createSymbolCard(symbol, type, colorClasses) {
+      const el = document.createElement('div');
+      el.className = `symbol-card cursor-grab active:cursor-grabbing select-none flex items-center justify-center h-12 sm:h-14 rounded-xl font-black text-2xl sm:text-3xl border shadow-sm active:scale-95 transition-all zhuyin-font ${colorClasses}`;
+      el.dataset.type = type;
+      el.dataset.symbol = symbol;
+      el.textContent = symbol;
+
+      setupPointerDrag(el);
+
+      // Direct tap/click placement
+      el.addEventListener('click', () => {
+        setSlotValue(type, symbol);
+        // Play quick preview sound of the symbol
+        speakText(symbol, 0.95);
+        showToast(`已放入 ${typeMappingName(type)}：${symbol}`);
+      });
+
+      return el;
+    }
+
+    function typeMappingName(type) {
+      switch(type) {
+        case 'initial': return '聲符';
+        case 'medial': return '介音';
+        case 'final': return '韻符';
+        case 'tone': return '聲調';
+      }
+      return '';
+    }
+
+    let currentDrag = null;
+
+    function setupPointerDrag(element) {
+      element.addEventListener('pointerdown', (e) => {
+        // Only primary mouse button or finger touch
+        if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+        const type = element.dataset.type;
+        const symbol = element.dataset.symbol;
+        const name = element.dataset.name || '';
+
+        // Create visual clone
+        const clone = element.cloneNode(true);
+        clone.classList.add('dragging-ghost');
+        clone.style.left = `${e.clientX}px`;
+        clone.style.top = `${e.clientY}px`;
+        clone.style.width = `${element.offsetWidth}px`;
+        clone.style.height = `${element.offsetHeight}px`;
+        document.body.appendChild(clone);
+
+        currentDrag = {
+          element,
+          clone,
+          type,
+          symbol,
+          name,
+          pointerId: e.pointerId
+        };
+
+        element.setPointerCapture(e.pointerId);
+
+        const onPointerMove = (moveEv) => {
+          if (!currentDrag) return;
+          currentDrag.clone.style.left = `${moveEv.clientX}px`;
+          currentDrag.clone.style.top = `${moveEv.clientY}px`;
+
+          // Detect slot hover
+          highlightHoverSlot(moveEv.clientX, moveEv.clientY, currentDrag.type);
+        };
+
+        const onPointerUp = (upEv) => {
+          element.removeEventListener('pointermove', onPointerMove);
+          element.removeEventListener('pointerup', onPointerUp);
+          element.removeEventListener('pointercancel', onPointerUp);
+
+          if (currentDrag && currentDrag.clone) {
+            currentDrag.clone.remove();
+          }
+
+          // Check if dropped inside compatible target slot
+          checkDrop(upEv.clientX, upEv.clientY, currentDrag.type, currentDrag.symbol, currentDrag.name);
+          clearAllSlotHover();
+          currentDrag = null;
+        };
+
+        element.addEventListener('pointermove', onPointerMove);
+        element.addEventListener('pointerup', onPointerUp);
+        element.addEventListener('pointercancel', onPointerUp);
+      });
+    }
+
+    /* Highlight hovered slot if types match */
+    function highlightHoverSlot(x, y, dragType) {
+      const slots = document.querySelectorAll('.target-slot');
+      slots.forEach(slot => {
+        const box = slot.querySelector('.slot-box');
+        const rect = box.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          if (slot.dataset.type === dragType) {
+            box.classList.add('slot-hover');
+          }
+        } else {
+          box.classList.remove('slot-hover');
+        }
+      });
+    }
+
+    function clearAllSlotHover() {
+      document.querySelectorAll('.slot-box').forEach(b => b.classList.remove('slot-hover'));
+    }
+
+    /* Handle drop event logic */
+    function checkDrop(x, y, dragType, symbol, toneName) {
+      const slots = document.querySelectorAll('.target-slot');
+      for (const slot of slots) {
+        const box = slot.querySelector('.slot-box');
+        const rect = box.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          if (slot.dataset.type === dragType) {
+            setSlotValue(dragType, symbol, toneName);
+            showToast(`已替換 ${typeMappingName(dragType)}：${symbol || toneName}`);
+            return;
+          } else {
+            showToast(`此格僅能放入【${typeMappingName(slot.dataset.type)}】喔！`);
+          }
+        }
+      }
+    }
+
+    function setSlotValue(type, value, toneName = '') {
+      if (type === 'tone') {
+        const found = BOPOMOFO_DATA.tones.find(t => t.value === value || t.name === toneName);
+        state.slots.tone = found || { label: toneName, symbol: value || 'ˉ', value: value, name: toneName || '一聲' };
+      } else {
+        state.slots[type] = value;
+      }
+      updateSlotDisplay();
+      updateCombinedDisplay();
+    }
+
+    function clearSlotValue(type) {
+      if (type === 'tone') {
+        state.slots.tone = null;
+      } else {
+        state.slots[type] = '';
+      }
+      updateSlotDisplay();
+      updateCombinedDisplay();
+    }
+
+    function updateSlotDisplay() {
+      const slots = document.querySelectorAll('.target-slot');
+      slots.forEach(slot => {
+        const type = slot.dataset.type;
+        const placeholder = slot.querySelector('.slot-placeholder');
+        const symEl = slot.querySelector('.slot-symbol');
+        const clearBtn = slot.querySelector('.slot-clear-btn');
+
+        if (type === 'tone') {
+          const toneObj = state.slots.tone;
+          if (toneObj !== null) {
+            placeholder.classList.add('hidden');
+            symEl.classList.remove('hidden');
+            clearBtn.classList.remove('hidden');
+            symEl.textContent = toneObj.symbol || 'ˉ';
+          } else {
+            placeholder.classList.remove('hidden');
+            symEl.classList.add('hidden');
+            clearBtn.classList.add('hidden');
+            symEl.textContent = '';
+          }
+        } else {
+          const val = state.slots[type];
+          if (val) {
+            placeholder.classList.add('hidden');
+            symEl.classList.remove('hidden');
+            clearBtn.classList.remove('hidden');
+            symEl.textContent = val;
+          } else {
+            placeholder.classList.remove('hidden');
+            symEl.classList.add('hidden');
+            clearBtn.classList.add('hidden');
+            symEl.textContent = '';
+          }
+        }
+      });
+    }
+
+    /* Helper: get tone mark for text combination (一聲不帶字尾調號或只帶ˉ) */
+    function getToneDisplaySymbol(toneObj) {
+      if (!toneObj) return '';
+      // 國語注音排版一聲不標符號（或以空格/陰平標記），此處用於文字拼音顯示
+      return toneObj.value === 'ˉ' ? '' : toneObj.value;
+    }
+
+    /* Update live combined string and detailed description */
+    function updateCombinedDisplay() {
+      const { initial, medial, final, tone } = state.slots;
+      const displayEl = document.getElementById('display-combined');
+      const toneDescEl = document.getElementById('display-tone-desc');
+
+      const parts = [initial, medial, final].filter(Boolean);
+
+      if (parts.length === 0 && !tone) {
+        displayEl.textContent = '（尚未放入符號）';
+        toneDescEl.textContent = '請由下方挑選注音符號放入上方格子，或點此聽發音';
+        return;
+      }
+
+      // Build combined display string with tone mark
+      const toneMark = tone ? getToneDisplaySymbol(tone) : '';
+      const combined = (parts.join('') || '') + toneMark;
+      displayEl.textContent = combined || (tone ? tone.name : '（尚未放入符號）');
+
+      const toneText = tone ? `${tone.name} (${tone.symbol})` : '未設定 (預設一聲)';
+      toneDescEl.textContent = `結構：${initial ? '聲符['+initial+'] ' : ''}${medial ? '介音['+medial+'] ' : ''}${final ? '韻符['+final+'] ' : ''}，聲調：${toneText}`;
+    }
+
+    async function runSpellingMode1() {
+      if (state.isSpeaking) return;
+      const { initial, medial, final, tone } = state.slots;
+      const parts = [initial, medial, final].filter(Boolean);
+
+      if (parts.length === 0) {
+        showToast('請先放入至少一個注音符號喔！');
+        return;
+      }
+
+      setSpeakingState(true, '拼法一朗讀中');
+
+      try {
+        // 1. 唸聲符 (若有)
+        if (initial) {
+          highlightSlot('initial');
+          await speakText(initial, 0.85);
+          await wait(350);
+        }
+
+        // 2. 唸介音 (若有)
+        if (medial) {
+          highlightSlot('medial');
+          await speakText(medial, 0.85);
+          await wait(350);
+        }
+
+        // 3. 唸韻符 (若有)
+        if (final) {
+          highlightSlot('final');
+          await speakText(final, 0.85);
+          await wait(350);
+        }
+
+        // 4. 唸整字 (合音)
+        clearHighlightSlots();
+        const toneMark = getToneDisplaySymbol(tone);
+        const wholeSyllable = parts.join('') + toneMark;
+        highlightSlot('combined');
+        await speakText(wholeSyllable, 0.85);
+        await wait(350);
+
+        // 5. 唸幾聲 + 整字 (例如: "三聲，ㄅㄧㄥˇ")
+        const toneSpeechName = tone ? tone.name : '一聲';
+        await speakText(`${toneSpeechName}，${wholeSyllable}`, 0.85);
+
+      } finally {
+        clearHighlightSlots();
+        setSpeakingState(false);
+      }
+    }
+
+    async function runSpellingMode2() {
+      if (state.isSpeaking) return;
+      const { initial, medial, final, tone } = state.slots;
+
+      if (!initial && !medial && !final) {
+        showToast('請先放入至少一個注音符號喔！');
+        return;
+      }
+
+      setSpeakingState(true, '拼法二朗讀中');
+
+      try {
+        const toneMark = getToneDisplaySymbol(tone);
+        const wholeSyllable = [initial, medial, final].filter(Boolean).join('') + toneMark;
+        const toneSpeechName = tone ? tone.name : '一聲';
+
+        // 情況 A: 具備介音 + 韻符 (標準結合韻如：ㄧㄥ)
+        if (medial && final) {
+          // 1. 唸聲符 (若有)
+          if (initial) {
+            highlightSlot('initial');
+            await speakText(initial, 0.85);
+            await wait(350);
+          }
+
+          // 2. 唸結合韻帶調 (例如：ㄧㄥˇ)
+          highlightSlot('medial');
+          highlightSlot('final');
+          if (tone) highlightSlot('tone');
+          const combinedRhyme = medial + final + toneMark;
+          await speakText(combinedRhyme, 0.85);
+          await wait(350);
+
+          // 3. 唸整字帶調
+          clearHighlightSlots();
+          highlightSlot('combined');
+          await speakText(wholeSyllable, 0.85);
+          await wait(350);
+
+          // 4. 唸幾聲，整字
+          await speakText(`${toneSpeechName}，${wholeSyllable}`, 0.85);
+
+        } else if (initial && final) {
+          // 情況 B: 二拼 (聲符 + 韻符)
+          // 1. 唸聲符
+          highlightSlot('initial');
+          await speakText(initial, 0.85);
+          await wait(350);
+
+          // 2. 唸韻符帶調
+          highlightSlot('final');
+          if (tone) highlightSlot('tone');
+          await speakText(final + toneMark, 0.85);
+          await wait(350);
+
+          // 3. 唸整字
+          clearHighlightSlots();
+          highlightSlot('combined');
+          await speakText(wholeSyllable, 0.85);
+          await wait(350);
+
+          // 4. 唸幾聲整字
+          await speakText(`${toneSpeechName}，${wholeSyllable}`, 0.85);
+
+        } else {
+          // 情況 C: 單音或特殊組合，直接清晰發音
+          highlightSlot('combined');
+          await speakText(wholeSyllable, 0.85);
+          await wait(300);
+          await speakText(`${toneSpeechName}，${wholeSyllable}`, 0.85);
+        }
+
+      } finally {
+        clearHighlightSlots();
+        setSpeakingState(false);
+      }
+    }
+
+    /* Direct Single Sound Reading */
+    async function speakCurrentCombined() {
+      if (state.isSpeaking) return;
+      const { initial, medial, final, tone } = state.slots;
+      const parts = [initial, medial, final].filter(Boolean);
+      const toneMark = getToneDisplaySymbol(tone);
+      const whole = parts.join('') + toneMark;
+
+      if (!whole && !tone) {
+        showToast('目前格內沒有符號喔！');
+        return;
+      }
+      setSpeakingState(true, '發音中');
+      try {
+        highlightSlot('combined');
+        if (whole) {
+          await speakText(whole, 0.85);
+        } else if (tone) {
+          await speakText(tone.name, 0.85);
+        }
+      } finally {
+        clearHighlightSlots();
+        setSpeakingState(false);
+      }
+    }
+
+    /* UI State & Highlight Helpers */
+    function setSpeakingState(speaking, text = '') {
+      state.isSpeaking = speaking;
+      const badge = document.getElementById('speaker-status-box');
+      const subtext = document.getElementById('speech-subtext');
+      if (speaking) {
+        badge.classList.remove('hidden');
+        badge.classList.add('flex');
+        subtext.textContent = text;
+      } else {
+        badge.classList.add('hidden');
+        badge.classList.remove('flex');
+      }
+    }
+
+    function highlightSlot(type) {
+      if (type === 'combined') {
+        document.getElementById('display-combined').parentElement.parentElement.classList.add('speaking-glow');
+        return;
+      }
+      const slot = document.querySelector(`.target-slot[data-type="${type}"] .slot-box`);
+      if (slot) slot.classList.add('speaking-glow');
+    }
+
+    function clearHighlightSlots() {
+      document.querySelectorAll('.slot-box').forEach(b => b.classList.remove('speaking-glow'));
+      const combinedCard = document.getElementById('display-combined');
+      if (combinedCard) combinedCard.parentElement.parentElement.classList.remove('speaking-glow');
+    }
+
+    function setupEventBindings() {
+      // 1. Reset all slots
+      document.getElementById('reset-all-btn').addEventListener('click', () => {
+        state.slots.initial = '';
+        state.slots.medial = '';
+        state.slots.final = '';
+        state.slots.tone = null;
+        updateSlotDisplay();
+        updateCombinedDisplay();
+        showToast('已清空全部注音格！');
+      });
+
+      // 2. Individual clear buttons in slots
+      document.querySelectorAll('.target-slot').forEach(slot => {
+        const type = slot.dataset.type;
+        const clearBtn = slot.querySelector('.slot-clear-btn');
+        clearBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          clearSlotValue(type);
+          showToast(`已移除${typeMappingName(type)}`);
+        });
+
+        // Clicking the slot itself can clear it if filled
+        slot.querySelector('.slot-box').addEventListener('click', () => {
+          const isFilled = type === 'tone' ? state.slots.tone !== null : Boolean(state.slots[type]);
+          if (isFilled) {
+            clearSlotValue(type);
+            showToast(`已移除${typeMappingName(type)}`);
+          }
+        });
+      });
+
+      // 3. Spelling Action Buttons & Integrated Clickable Combined Sound Card
+      document.getElementById('btn-spell-mode1').addEventListener('click', runSpellingMode1);
+      document.getElementById('btn-spell-mode2').addEventListener('click', runSpellingMode2);
+      document.getElementById('card-combined-sound').addEventListener('click', speakCurrentCombined);
+
+      // 4. Fullscreen Button
+      const fsBtn = document.getElementById('fullscreen-btn');
+      fsBtn.addEventListener('click', () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {
+            showToast('瀏覽器全螢幕模式受限');
+          });
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    }
+
+    /* Helper: Toast notification */
+    let toastTimer = null;
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.remove('opacity-0');
+      t.classList.add('opacity-100');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        t.classList.remove('opacity-100');
+        t.classList.add('opacity-0');
+      }, 1800);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initSpeechEngine();
+      renderSymbolPools();
+      setupEventBindings();
+      updateSlotDisplay();
+      updateCombinedDisplay();
+    });
+  </script>
+</body>
+</html>
