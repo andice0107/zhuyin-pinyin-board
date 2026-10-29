@@ -156,6 +156,11 @@
       .pool.rhyme-open { grid-template-columns: 5fr 5.2fr 2.2fr; }
     }
     .pool.rhyme-open .g-medial, .pool.rhyme-open .g-final { display: none; }
+    .tap-sound {
+      border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3;
+      border-radius: 12px; padding: 8px 14px; font-weight: 900;
+    }
+    .tap-sound[aria-pressed="false"] { background: #475569; color: #fff; border-color: #475569; }
     .rhyme-toggle {
       border: 1px solid #99f6e4; background: #f0fdfa; color: #0f766e;
       border-radius: 12px; padding: 8px 14px; font-weight: 900;
@@ -310,6 +315,7 @@
         <small>點一下自動放入，或按住拖曳到上方格子</small>
       </div>
       <div class="row">
+        <button class="tap-sound" id="tap-sound" aria-pressed="true" title="關掉後，點符號只會放入格子不發聲，方便考學生">🔊 點了就發音：開</button>
         <button class="rhyme-toggle" id="rhyme-toggle" aria-expanded="false" aria-controls="group-rhyme">結合韻表 ▸</button>
         <button class="reset-btn" id="reset-btn">↺ 全部清空</button>
       </div>
@@ -755,7 +761,19 @@ function lightUp(mode, step, index) {
 }
 
 // 單一符號試聽（點符號卡或格子時）
+// 「點了就發音」關閉時，點符號只放入格子不發聲（考試用）；三個拼讀鍵不受影響
+let tapSound = store.get('zb-tap-sound', true);
+
+function setTapSound(on) {
+  tapSound = on;
+  const btn = $('#tap-sound');
+  btn.setAttribute('aria-pressed', String(on));
+  btn.textContent = on ? '🔊 點了就發音：開' : '🔇 點了就發音：關';
+  store.set('zb-tap-sound', on);
+}
+
 async function previewSymbol(type, value) {
+  if (!tapSound) return;
   stopRun();
   if (type === 'tone') return playStep({ kind: 'tone', key: toneById(value).name });
   // 結合韻整個一起唸（一聲），不拆開
@@ -1233,6 +1251,11 @@ function bindEvents() {
   $('#stop-btn').addEventListener('click', stopRun);
   $('#rhyme-toggle').addEventListener('click', () => setRhymeOpen($('#group-rhyme').hidden));
   setRhymeOpen(store.get('zb-rhyme-open', false));
+  $('#tap-sound').addEventListener('click', () => {
+    setTapSound(!tapSound);
+    toast(tapSound ? '點符號會馬上發音' : '點符號不發音，按拼讀鍵才發音');
+  });
+  setTapSound(tapSound);
   $('#reset-btn').addEventListener('click', () => {
     stopRun();
     Object.assign(state, { initial: '', medial: '', final: '', tone: null });
