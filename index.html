@@ -23,6 +23,7 @@
       --radius: 18px;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html, body { margin: 0; }
     body {
       font-family: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', 'Heiti TC', sans-serif;
@@ -120,6 +121,38 @@
     .demo-char { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; opacity: .95; }
     .demo-char b { font-size: 22px; }
     .demo-char button { border: 1px solid rgba(255,255,255,.5); background: rgba(255,255,255,.15); color: #fff; border-radius: 10px; padding: 3px 10px; font-size: 13px; }
+
+    /* 語詞模式的字卡列 */
+    .strip { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; }
+    .syl {
+      position: relative; min-width: 64px; padding: 8px 12px 18px; border-radius: 14px;
+      background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.35); color: #fff;
+      display: flex; align-items: center; justify-content: center; transition: box-shadow .2s;
+    }
+    .syl.active { background: rgba(255,255,255,.28); border-color: #fde047; }
+    .syl.lit { box-shadow: 0 0 0 4px var(--glow), 0 0 22px 6px rgba(249,115,22,.5); }
+    .syl.bad { border-color: #fca5a5; border-style: dashed; }
+    .syl .vz-col { font-size: clamp(26px, 2.8vw, 36px); }
+    .syl .vz-tone { font-size: clamp(20px, 2.2vw, 28px); }
+    .syl .vz-empty { font-size: 22px; }
+    .syl-n { position: absolute; bottom: 2px; left: 0; right: 0; text-align: center; font-size: 11px; opacity: .8; }
+    .syl-x {
+      position: absolute; top: -9px; right: -9px; width: 24px; height: 24px; border-radius: 50%;
+      background: var(--danger); border: 2px solid #fff; font-size: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .add-syl {
+      align-self: flex-start; border: 2px dashed rgba(255,255,255,.65); background: transparent; color: #fff;
+      border-radius: 14px; padding: 8px 12px; font-weight: 900; font-size: 15px;
+    }
+    .strip .add-syl { align-self: stretch; }
+    .word-text {
+      font: inherit; font-size: 18px; font-weight: 700; padding: 6px 10px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.5); background: rgba(255,255,255,.95); color: var(--ink); max-width: 260px;
+    }
+    .word-hint { font-size: 13px; opacity: .9; }
+    .word-hint:empty { display: none; }
+    .result.word-mode { flex-direction: column; align-items: stretch; }
 
     .modes { display: grid; grid-template-columns: 1fr; gap: 10px; }
     @media (min-width: 700px) { .modes { grid-template-columns: repeat(3, 1fr); } }
@@ -282,25 +315,31 @@
     <div class="panel result-panel">
       <div class="result" id="result">
         <div class="vz" id="vz"></div>
+        <!-- 語詞模式：每個字一張卡，點卡片就在左邊格子編輯那個字 -->
+        <div class="strip" id="strip" hidden></div>
         <div class="result-info">
           <div class="result-msg" id="result-msg"></div>
           <div class="demo-char" id="demo-char"></div>
+          <input class="word-text" id="word-text" hidden maxlength="4" autocomplete="off"
+                 placeholder="語詞文字（選填，例如：餅乾）" aria-label="語詞文字">
+          <div class="word-hint" id="word-hint"></div>
+          <button class="add-syl" id="add-syl-single">＋ 加一個字（拼語詞）</button>
         </div>
       </div>
       <div class="modes">
         <button class="mode direct" data-mode="direct">
           <span class="mode-title">🗣️ 逐音唸直拼</span>
-          <span class="mode-desc">每個符號分開唸一次，再唸整個字音</span>
+          <span class="mode-desc" data-desc="direct"></span>
           <span class="chips" data-chips="direct"></span>
         </button>
         <button class="mode rhyme" data-mode="rhyme">
           <span class="mode-title">🎶 結合韻拼法</span>
-          <span class="mode-desc">介音＋韻符合成結合韻一起唸（帶聲調），聲符分開唸</span>
+          <span class="mode-desc" data-desc="rhyme"></span>
           <span class="chips" data-chips="rhyme"></span>
         </button>
         <button class="mode whole" data-mode="whole">
-          <span class="mode-title">🔊 唸整個字音</span>
-          <span class="mode-desc">直接唸出整組字音</span>
+          <span class="mode-title" data-title="whole"></span>
+          <span class="mode-desc" data-desc="whole"></span>
           <span class="chips" data-chips="whole"></span>
         </button>
       </div>
@@ -431,7 +470,14 @@ const RECORD_SUGGESTED = new Set(['ㄜ', 'ㄝ', 'ㄟ', 'ㄥ', 'ㄧㄝ', 'ㄧㄞ'
 const TYPE_NAME = { initial: '聲符', medial: '介音', final: '韻符', tone: '聲調', rhyme: '結合韻' };
 const STEP_GAP_MS = 450;
 
-const state = { initial: '', medial: '', final: '', tone: null };
+// 語詞：最多 4 個字，每個字一組格子；state 指向目前在格子裡編輯的那個字
+const MAX_SYLLABLES = 4;
+const blankSyllable = () => ({ initial: '', medial: '', final: '', tone: null });
+let word = [blankSyllable()];
+let active = 0;
+let state = word[0];
+let wordText = '';   // 老師輸入的語詞文字（選填），整個語詞用它來念
+const isWord = () => word.length > 1;
 
 /* ================= 小工具 ================= */
 const $ = (s, el = document) => el.querySelector(s);
@@ -644,16 +690,16 @@ function stopSound() {
 }
 
 /* ================= 拼音分析 ================= */
-function analyze() {
-  const { initial: i, medial: m, final: f } = state;
-  const tone = toneById(state.tone);
+function analyze(s = state) {
+  const { initial: i, medial: m, final: f } = s;
+  const tone = toneById(s.tone);
   const parts = [i, m, f].filter(Boolean);
   const base = parts.join('');
   const key = base + tone.mark;
   const a = { i, m, f, tone, parts, base, key, ok: false, msg: '' };
 
   if (!parts.length) {
-    a.msg = state.tone ? '請再放入注音符號' : '點選或拖曳下方的注音符號放進格子';
+    a.msg = s.tone ? '請再放入注音符號' : '點選或拖曳下方的注音符號放進格子';
     return a;
   }
   if (i && !m && !f && !SOLO_INITIALS.includes(i)) {
@@ -689,11 +735,65 @@ function buildSteps(mode, a) {
   return [...initialStep, ...symbolSteps, ...tail];
 }
 
+// 整個語詞的分析：每個字都要是國語中存在的音
+function analyzeWord() {
+  const items = word.map(s => analyze(s));
+  const badAt = items.findIndex(a => !a.ok);
+  const w = { items, ok: badAt < 0, key: items.map(a => a.key).join(' '), msg: '' };
+  if (badAt >= 0) w.msg = `第 ${badAt + 1} 個字：${items[badAt].msg}`;
+  return w;
+}
+
+// 目前要播放的內容：單字或語詞
+const current = () => (isWord() ? analyzeWord() : analyze());
+
+// 語詞的拼讀步驟：逐字拼（不唸調名），最後唸整個語詞
+function buildWordSteps(mode, w) {
+  const whole = { kind: 'word', key: w.key, lit: ['result', 'syl-all'] };
+  if (mode === 'whole') return [whole];
+  const steps = [];
+  w.items.forEach((a, si) => {
+    const syl = { kind: 'syllable', key: a.key, lit: ['initial', 'medial', 'final', 'tone', 'syl'] };
+    let parts;
+    if (a.parts.length === 1) parts = [syl];
+    else if (mode === 'rhyme' && a.m && a.f) {
+      parts = a.i
+        ? [{ kind: 'initial', key: a.i, lit: ['initial', 'syl'] },
+           { kind: 'syllable', key: a.m + a.f + a.tone.mark, lit: ['medial', 'final', 'tone', 'syl'] }, syl]
+        : [syl];
+    } else {
+      parts = [
+        ...(a.i ? [{ kind: 'initial', key: a.i, lit: ['initial', 'syl'] }] : []),
+        ...[a.m, a.f].filter(Boolean).map(s => ({ kind: 'symbol', key: s, lit: [s === a.m ? 'medial' : 'final', 'syl'] })),
+        syl,
+      ];
+    }
+    steps.push(...parts.map(p => ({ ...p, si })));
+  });
+  steps.push(whole);
+  return steps;
+}
+
+const stepsFor = (mode, c) => (isWord() ? buildWordSteps(mode, c) : buildSteps(mode, c));
+
+// 整個語詞要念的文字：老師輸入的文字（字數相符時）優先，否則用每個字的示範字
+function wordSpeechText(key) {
+  const keys = key.split(' ');
+  const typed = [...wordText];
+  if (typed.length === keys.length) return wordText;
+  const chars = keys.map(k => media.charOf(k));
+  return chars.every(Boolean) ? chars.join('') : null;
+}
+
 // 決定一個步驟要怎麼發音
 function resolveStep(step) {
   const recKey = step.kind === 'tone' ? '調:' + step.key : step.key;
   const audio = media.audio(recKey);
   if (audio) return { audio };
+  if (step.kind === 'word') {
+    const text = wordSpeechText(step.key);
+    return text ? { text } : { missing: '有字沒有示範字，請在「語詞文字」輸入這個語詞，或到〔錄音〕錄下來' };
+  }
   if (step.kind === 'initial') return { missing: `「${step.key}」的本音還沒錄音` };
   if (step.kind === 'symbol') return { text: SYMBOL_CHARS[step.key] };
   if (step.kind === 'tone') return { text: step.key };
@@ -701,17 +801,21 @@ function resolveStep(step) {
   return ch ? { text: ch } : { missing: `「${fmt(step.key)}」沒有適合的示範字，可以到〔錄音〕錄下來` };
 }
 
-const stepLabel = s => s.kind === 'syllable' ? fmt(s.key) : s.key;
+const stepLabel = s => {
+  if (s.kind === 'word') return s.key.split(' ').map(fmt).join(' ');
+  return s.kind === 'syllable' ? fmt(s.key) : s.key;
+};
 
 /* ================= 播放流程 ================= */
 let runId = 0;
 
 async function runMode(mode) {
-  const a = analyze();
-  if (!a.ok) { toast(a.msg); return; }
+  const c = current();
+  if (!c.ok) { toast(c.msg); return; }
   stopRun();
   const id = ++runId;
-  const steps = buildSteps(mode, a);
+  const steps = stepsFor(mode, c);
+  const startActive = active;
   renderChips(mode, steps);
   $(`.mode[data-mode="${mode}"]`).classList.add('running');
   $('#stop-btn').classList.add('show');
@@ -724,7 +828,11 @@ async function runMode(mode) {
       if (n < steps.length - 1) await wait(STEP_GAP_MS);
     }
   } finally {
-    if (id === runId) clearRunUI();
+    if (id === runId) {
+      clearRunUI();
+      // 播放時格子會跟著換到正在拼的字，播完回到原本編輯的字
+      if (active !== startActive) setActive(startActive, false);
+    }
   }
 }
 
@@ -750,10 +858,17 @@ function clearRunUI() {
 }
 
 function lightUp(mode, step, index) {
+  // 語詞拼讀時，格子切換到正在拼的那個字
+  if (step.si !== undefined && step.si !== active) {
+    setActive(step.si, false);
+    renderChips(mode, stepsFor(mode, current()));
+  }
   $$('.lit').forEach(el => el.classList.remove('lit'));
   for (const name of step.lit) {
     let el;
-    if (name === 'result') el = $('#result');
+    if (name === 'syl-all') { $$('.syl').forEach(s => s.classList.add('lit')); continue; }
+    if (name === 'syl') el = $(`.syl[data-i="${step.si}"]`);
+    else if (name === 'result') el = isWord() ? null : $('#result');
     else if (name === 'tone') el = $(`.slot[data-pos="${state.tone === 5 ? 'top' : 'side'}"]`);
     else el = $(`.slot[data-type="${name}"]`);
     if (el) el.classList.add('lit');
@@ -792,10 +907,63 @@ async function previewSymbol(type, value) {
 function render() {
   renderSlots();
   renderResult();
-  for (const mode of ['direct', 'rhyme', 'whole']) {
-    const a = analyze();
-    renderChips(mode, a.ok ? buildSteps(mode, a) : null);
-  }
+  renderModeLabels();
+  renderAllChips();
+}
+
+function renderAllChips() {
+  const c = current();
+  for (const mode of ['direct', 'rhyme', 'whole']) renderChips(mode, c.ok ? stepsFor(mode, c) : null);
+}
+
+const MODE_TEXT = {
+  single: {
+    direct: '每個符號分開唸一次，再唸整個字音',
+    rhyme: '介音＋韻符合成結合韻一起唸（帶聲調），聲符分開唸',
+    wholeTitle: '🔊 唸整個字音', whole: '直接唸出整組字音',
+  },
+  word: {
+    direct: '每個字逐音唸，再唸那個字，最後唸整個語詞',
+    rhyme: '每個字唸聲符＋結合韻，再唸那個字，最後唸整個語詞',
+    wholeTitle: '🔊 唸整個語詞', whole: '直接唸出整個語詞',
+  },
+};
+
+function renderModeLabels() {
+  const t = MODE_TEXT[isWord() ? 'word' : 'single'];
+  $('[data-desc="direct"]').textContent = t.direct;
+  $('[data-desc="rhyme"]').textContent = t.rhyme;
+  $('[data-desc="whole"]').textContent = t.whole;
+  $('[data-title="whole"]').textContent = t.wholeTitle;
+}
+
+/* ---------- 語詞：新增、切換、刪除字 ---------- */
+function setActive(i, stop = true) {
+  if (stop) stopRun();
+  active = i;
+  state = word[i];
+  render();
+}
+
+function addSyllable() {
+  if (word.length >= MAX_SYLLABLES) { toast(`最多 ${MAX_SYLLABLES} 個字`); return; }
+  word.push(blankSyllable());
+  setActive(word.length - 1);
+  toast(`第 ${word.length} 個字：請在左邊格子拼音`);
+}
+
+function removeSyllable(i) {
+  stopRun();
+  word.splice(i, 1);
+  if (!word.length) word.push(blankSyllable());
+  setActive(Math.min(active > i ? active - 1 : active, word.length - 1), false);
+}
+
+function vzHtml(a) {
+  if (!a.parts.length) return `<span class="vz-empty">？</span>`;
+  const dot = a.tone.mark === '˙' ? '<span class="dot">˙</span>' : '';
+  const side = a.tone.mark && a.tone.mark !== '˙' ? `<span class="vz-tone">${a.tone.mark}</span>` : '';
+  return `<div class="vz-col">${dot}${a.parts.map(p => `<span>${p}</span>`).join('')}</div>${side}`;
 }
 
 function renderSlots() {
@@ -827,15 +995,17 @@ function renderSlots() {
 }
 
 function renderResult() {
+  const multi = isWord();
+  $('#result').classList.toggle('word-mode', multi);
+  $('#vz').hidden = multi;
+  $('#strip').hidden = !multi;
+  $('#word-text').hidden = !multi;
+  $('#add-syl-single').hidden = multi;
+  if (multi) { renderWordResult(); return; }
+  $('#word-hint').textContent = '';
+
   const a = analyze();
-  const vz = $('#vz');
-  if (!a.parts.length) {
-    vz.innerHTML = `<span class="vz-empty">？</span>`;
-  } else {
-    const dot = a.tone.mark === '˙' ? '<span class="dot">˙</span>' : '';
-    const side = a.tone.mark && a.tone.mark !== '˙' ? `<span class="vz-tone">${a.tone.mark}</span>` : '';
-    vz.innerHTML = `<div class="vz-col">${dot}${a.parts.map(p => `<span>${p}</span>`).join('')}</div>${side}`;
-  }
+  $('#vz').innerHTML = vzHtml(a);
   const msg = $('#result-msg');
   msg.classList.toggle('bad', !a.ok && a.parts.length > 0);
   msg.textContent = a.ok ? `${fmt(a.key)}　${a.tone.name}` : a.msg;
@@ -868,6 +1038,33 @@ function renderResult() {
     });
     demo.appendChild(btn);
   }
+}
+
+function renderWordResult() {
+  const w = analyzeWord();
+  const cards = w.items.map((a, i) => `
+    <button class="syl${i === active ? ' active' : ''}${a.ok ? '' : ' bad'}" data-i="${i}" aria-label="第 ${i + 1} 個字">
+      <div class="vz">${vzHtml(a)}</div>
+      <span class="syl-x" data-x="${i}" aria-label="刪除第 ${i + 1} 個字">✕</span>
+      <span class="syl-n">第 ${i + 1} 字</span>
+    </button>`).join('');
+  const add = word.length < MAX_SYLLABLES ? '<button class="add-syl" data-add>＋ 加一個字</button>' : '';
+  $('#strip').innerHTML = cards + add;
+
+  const msg = $('#result-msg');
+  msg.classList.toggle('bad', !w.ok);
+  msg.textContent = w.ok ? `語詞：${w.key.split(' ').map(fmt).join(' ')}` : w.msg;
+
+  const demo = $('#demo-char');
+  const hint = $('#word-hint');
+  demo.textContent = '';
+  hint.textContent = '';
+  if (!w.ok) return;
+  if (media.audio(w.key)) { demo.innerHTML = '示範音：<b>老師錄音</b>'; return; }
+  const typed = [...wordText].length;
+  if (typed && typed !== word.length) hint.textContent = `語詞文字要剛好 ${word.length} 個字，目前 ${typed} 個字，先用示範字念`;
+  const text = wordSpeechText(w.key);
+  demo.innerHTML = text ? `念：<b>${text}</b>` : '有字沒有示範字，請輸入語詞文字';
 }
 
 function renderChips(mode, steps) {
@@ -1024,17 +1221,21 @@ const REC_RATE = 22050;
 
 function recItems() {
   const a = analyze();
-  const current = [];
+  const now = [];
   if (a.ok) {
-    if (a.i && a.m && a.f) current.push({ key: a.m + a.f + a.tone.mark, label: fmt(a.m + a.f + a.tone.mark), note: '結合韻' });
-    current.push({ key: a.key, label: fmt(a.key), note: '整個字音' });
+    if (a.i && a.m && a.f) now.push({ key: a.m + a.f + a.tone.mark, label: fmt(a.m + a.f + a.tone.mark), note: '結合韻' });
+    now.push({ key: a.key, label: fmt(a.key), note: '整個字音' });
+  }
+  if (isWord()) {
+    const w = analyzeWord();
+    if (w.ok) now.push({ key: w.key, label: w.key.split(' ').map(fmt).join(' '), note: '整個語詞' });
   }
   return {
     initial: INITIALS.map(s => ({ key: s, label: s })),
     symbol: [...MEDIALS, ...FINALS].map(s => ({ key: s, label: s, suggest: RECORD_SUGGESTED.has(s) })),
     rhyme: RHYMES.flat().map(r => ({ key: r, label: r, suggest: RECORD_SUGGESTED.has(r) })),
     tone: TONES.map(t => ({ key: '調:' + t.name, label: t.name })),
-    current,
+    current: now,
   };
 }
 
@@ -1062,6 +1263,7 @@ function recTile(group, it) {
   else if (group === 'initial') status = '未錄音';
   else if (group === 'symbol') status = `語音：${SYMBOL_CHARS[it.key]}`;
   else if (group === 'tone') status = '語音念';
+  else if (it.key.includes(' ')) status = wordSpeechText(it.key) ? `語音：${wordSpeechText(it.key)}` : '無示範字';
   else status = media.charOf(it.key) ? `語音：${media.charOf(it.key)}` : '無示範字';
   el.innerHTML = `
     <div class="rec-top"><span class="rec-sym">${it.label}</span><span class="rec-state">${it.note ? it.note + '<br>' : ''}${status}</span></div>
@@ -1248,7 +1450,20 @@ function bindEvents() {
     });
   }
   for (const btn of $$('.mode')) btn.addEventListener('click', () => runMode(btn.dataset.mode));
-  $('#result').addEventListener('click', () => runMode('whole'));
+  $('#result').addEventListener('click', e => {
+    const x = e.target.closest('[data-x]');
+    if (x) { removeSyllable(Number(x.dataset.x)); return; }
+    const syl = e.target.closest('.syl');
+    if (syl) { setActive(Number(syl.dataset.i)); return; }
+    if (e.target.closest('[data-add], #add-syl-single')) { addSyllable(); return; }
+    if (e.target.closest('button, input')) return;
+    runMode('whole');
+  });
+  $('#word-text').addEventListener('input', e => {
+    wordText = e.target.value.trim();
+    renderWordResult();
+    renderAllChips();
+  });
   $('#stop-btn').addEventListener('click', stopRun);
   $('#rhyme-toggle').addEventListener('click', () => setRhymeOpen($('#group-rhyme').hidden));
   setRhymeOpen(store.get('zb-rhyme-open', false));
@@ -1259,8 +1474,10 @@ function bindEvents() {
   setTapSound(tapSound);
   $('#reset-btn').addEventListener('click', () => {
     stopRun();
-    Object.assign(state, { initial: '', medial: '', final: '', tone: null });
-    render();
+    word = [blankSyllable()];
+    wordText = '';
+    $('#word-text').value = '';
+    setActive(0, false);
   });
 
   // 對話框
