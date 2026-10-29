@@ -321,8 +321,8 @@
         <div class="result-info">
           <div class="result-msg" id="result-msg"></div>
           <div class="demo-char" id="demo-char"></div>
-          <input class="word-text" id="word-text" hidden maxlength="4" autocomplete="off"
-                 placeholder="語詞文字（選填，例如：餅乾）" aria-label="語詞文字">
+          <input class="word-text" id="word-text" autocomplete="off"
+                 placeholder="輸入國字自動帶入注音（最多 4 字）" aria-label="輸入國字自動帶入注音">
           <div class="word-hint" id="word-hint"></div>
           <button class="add-syl" id="add-syl-single">＋ 加一個字（拼語詞）</button>
         </div>
@@ -793,6 +793,15 @@ function wordSpeechText(key) {
   return chars.every(Boolean) ? chars.join('') : null;
 }
 
+// 語詞中某個字：老師輸入的那個字單獨念的讀音就是這個字音時，直接念那個字（例如 自己家 的「己」）
+function typedCharFor(step) {
+  if (step.si === undefined || !readingsData) return null;
+  const chars = [...wordText];
+  if (chars.length !== word.length) return null;
+  const c = chars[step.si];
+  return readingsData.chars.get(c) === step.key ? c : null;
+}
+
 // 決定一個步驟要怎麼發音
 function resolveStep(step) {
   const recKey = step.kind === 'tone' ? '調:' + step.key : step.key;
@@ -805,6 +814,8 @@ function resolveStep(step) {
   if (step.kind === 'initial') return { missing: `「${step.key}」的本音還沒錄音` };
   if (step.kind === 'symbol') return { text: media.symbolChar(step.key) };
   if (step.kind === 'tone') return { text: step.key };
+  const typed = typedCharFor(step);
+  if (typed) return { text: typed };
   const ch = media.charOf(step.key);
   return ch ? { text: ch } : { missing: `「${fmt(step.key)}」沒有適合的示範字，可以到〔錄音〕錄下來` };
 }
@@ -967,6 +978,61 @@ function removeSyllable(i) {
   setActive(Math.min(active > i ? active - 1 : active, word.length - 1), false);
 }
 
+/* ---------- 輸入國字自動帶入注音 ---------- */
+// readings.json：c = 每個字的常用讀音；p = 讀音特殊的詞（破音字、輕聲），第一次用到時才下載
+let readingsData = null;
+async function loadReadings() {
+  if (readingsData) return readingsData;
+  const j = await fetch('readings.json?v=20261030').then(r => r.json());
+  const chars = new Map();
+  for (const [ph, list] of Object.entries(j.c)) for (const ch of list) chars.set(ch, ph);
+  const phrases = new Map(j.p.split('|').map(s => s.split(':')));
+  readingsData = { chars, phrases };
+  return readingsData;
+}
+
+// 先找整個詞的讀音，再由左往右找最長的詞，找不到才用單字讀音
+function textToZhuyin(text, data) {
+  const chars = [...text];
+  const out = [];
+  for (let i = 0; i < chars.length;) {
+    let matched = false;
+    for (let len = Math.min(4, chars.length - i); len >= 2; len--) {
+      const ph = data.phrases.get(chars.slice(i, i + len).join(''));
+      if (ph) { out.push(...ph.split(' ')); i += len; matched = true; break; }
+    }
+    if (!matched) { out.push(data.chars.get(chars[i]) || null); i++; }
+  }
+  return out;
+}
+
+function parseSyllable(ph) {
+  const s = blankSyllable();
+  const mark = 'ˊˇˋ˙'.includes(ph.slice(-1)) ? ph.slice(-1) : '';
+  s.tone = mark ? TONES.find(t => t.mark === mark).id : null;
+  for (const c of mark ? ph.slice(0, -1) : ph) {
+    if (INITIALS.includes(c)) s.initial = c;
+    else if (MEDIALS.includes(c)) s.medial = c;
+    else if (FINALS.includes(c)) s.final = c;
+  }
+  return s;
+}
+
+async function fillFromText(raw) {
+  const text = [...raw].filter(c => /\p{Script=Han}/u.test(c)).slice(0, MAX_SYLLABLES).join('');
+  wordText = text;
+  if (!text) { render(); return; }
+  let data;
+  try { data = await loadReadings(); } catch { toast('注音資料載入失敗，請檢查網路'); return; }
+  if ($('#word-text').value.trim() !== raw.trim()) return;   // 等待下載時又改了字
+  stopRun();
+  const readings = textToZhuyin(text, data);
+  word = readings.map(ph => (ph ? parseSyllable(ph) : blankSyllable()));
+  setActive(0, false);
+  const missing = [...text].filter((_, i) => !readings[i]);
+  if (missing.length) toast(`「${missing.join('')}」找不到注音，請在格子裡手動拼`);
+}
+
 function vzHtml(a) {
   if (!a.parts.length) return `<span class="vz-empty">？</span>`;
   const dot = a.tone.mark === '˙' ? '<span class="dot">˙</span>' : '';
@@ -1007,7 +1073,6 @@ function renderResult() {
   $('#result').classList.toggle('word-mode', multi);
   $('#vz').hidden = multi;
   $('#strip').hidden = !multi;
-  $('#word-text').hidden = !multi;
   $('#add-syl-single').hidden = multi;
   if (multi) { renderWordResult(); return; }
   $('#word-hint').textContent = '';
@@ -1532,16 +1597,26 @@ function bindEvents() {
     const x = e.target.closest('[data-x]');
     if (x) { removeSyllable(Number(x.dataset.x)); return; }
     const syl = e.target.closest('.syl');
-    if (syl) { setActive(Number(syl.dataset.i)); return; }
+    if (syl) {
+      // 點語詞中的某個字：切到那個字編輯，並唸出那個字的完整字音
+      const i = Number(syl.dataset.i);
+      setActive(i);
+      const a = analyze(word[i]);
+      if (tapSound && a.ok) {
+        lightUp('whole', { lit: ['syl', 'initial', 'medial', 'final', 'tone'], si: i }, -1);
+        playStep({ kind: 'syllable', key: a.key, si: i }).then(() => $$('.lit').forEach(el => el.classList.remove('lit')));
+      }
+      return;
+    }
     if (e.target.closest('[data-add], #add-syl-single')) { addSyllable(); return; }
     if (e.target.closest('button, input')) return;
     runMode('whole');
   });
-  $('#word-text').addEventListener('input', e => {
-    wordText = e.target.value.trim();
-    renderWordResult();
-    renderAllChips();
-  });
+  // 輸入國字：自動帶入每個字的注音（中文輸入法選字中不處理，選完才帶入）
+  const wordInput = $('#word-text');
+  wordInput.addEventListener('focus', () => { loadReadings().catch(() => {}); });
+  wordInput.addEventListener('input', e => { if (!e.isComposing) fillFromText(wordInput.value); });
+  wordInput.addEventListener('compositionend', () => fillFromText(wordInput.value));
   $('#stop-btn').addEventListener('click', stopRun);
   $('#rhyme-toggle').addEventListener('click', () => setRhymeOpen($('#group-rhyme').hidden));
   setRhymeOpen(store.get('zb-rhyme-open', false));

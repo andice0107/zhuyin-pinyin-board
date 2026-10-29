@@ -1,6 +1,6 @@
 """從新酷音詞庫 (libchewing-data, LGPL-2.1) 產生「注音音節 → 代表字」對照表。
 
-用法：python3 build_table.py <tsi.csv> <word.csv> <輸出 syllables.js>
+用法：python3 build_table.py <tsi.csv> <word.csv> <輸出 syllables.js> [<輸出 readings.json>]
 
 挑字原則：
 - 只用單字條目，依使用頻率排序。
@@ -106,5 +106,61 @@ def main(tsi_path, word_path, out_path):
     print(f'{len(out)} syllables written to {out_path}', file=sys.stderr)
 
 
+# 常用詞的標準讀音（詞庫沒有標輕聲或讀音不一的，依教育部國語辭典）
+PHRASE_MANUAL = {
+    '什麼': 'ㄕㄣˊ ㄇㄜ˙', '衣服': 'ㄧ ㄈㄨ˙', '朋友': 'ㄆㄥˊ ㄧㄡ˙', '時候': 'ㄕˊ ㄏㄡ˙',
+    '漂亮': 'ㄆㄧㄠˋ ㄌㄧㄤ˙', '先生': 'ㄒㄧㄢ ㄕㄥ˙', '爺爺': 'ㄧㄝˊ ㄧㄝ˙', '奶奶': 'ㄋㄞˇ ㄋㄞ˙',
+    '叔叔': 'ㄕㄨˊ ㄕㄨ˙', '伯伯': 'ㄅㄛˊ ㄅㄛ˙', '弟弟': 'ㄉㄧˋ ㄉㄧ˙', '姐姐': 'ㄐㄧㄝˇ ㄐㄧㄝ˙',
+    '寶寶': 'ㄅㄠˇ ㄅㄠ˙',
+}
+
+
+def build_readings(tsi_path, out_path):
+    """產生「國字 → 注音」資料，給「輸入文字自動帶入注音」使用。
+
+    c：每個字最常用的讀音，依讀音分組 {注音: 字串}
+    p：讀音和逐字預設讀音不同的詞（破音字、輕聲），格式「詞:注音 注音|…」
+    """
+    char_freq = defaultdict(lambda: defaultdict(int))
+    phrases = defaultdict(dict)
+    with open(tsi_path, encoding='utf-8') as f:
+        for row in csv.reader(f):
+            if not row or row[0].startswith('#') or len(row) < 3:
+                continue
+            word, freq, phones = row[0], int(row[1] or 0), row[2].split()
+            if len(word) == 1 and len(phones) == 1:
+                char_freq[word][phones[0]] += freq
+            elif 2 <= len(word) <= 4 and len(phones) == len(word):
+                reading = ' '.join(phones)
+                phrases[word][reading] = max(freq, phrases[word].get(reading, 0))
+
+    default = {ch: max(r.items(), key=lambda x: x[1])[0]
+               for ch, r in char_freq.items()
+               if sum(r.values()) >= 1 and '一' <= ch <= '鿿'}
+    by_reading = defaultdict(str)
+    for ch, ph in sorted(default.items()):
+        by_reading[ph] += ch
+
+    exceptions = []
+    for word, readings in phrases.items():
+        # 頻率相同時，選標了輕聲的讀法（課本寫法，如 媽媽 ㄇㄚ ˙ㄇㄚ）
+        best, f = max(readings.items(), key=lambda x: (x[1], x[0].count('˙')))
+        best = PHRASE_MANUAL.get(word, best)
+        if f < 1 or any(ch not in default for ch in word):
+            continue
+        if best != ' '.join(default[ch] for ch in word):
+            exceptions.append(f'{word}:{best}')
+    for word, best in PHRASE_MANUAL.items():
+        if word not in phrases:
+            exceptions.append(f'{word}:{best}')
+
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump({'c': by_reading, 'p': '|'.join(sorted(exceptions))}, f,
+                  ensure_ascii=False, separators=(',', ':'))
+    print(f'{len(default)} chars, {len(exceptions)} phrases written to {out_path}', file=sys.stderr)
+
+
 if __name__ == '__main__':
     main(*sys.argv[1:4])
+    if len(sys.argv) > 4:
+        build_readings(sys.argv[1], sys.argv[4])
