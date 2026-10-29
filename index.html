@@ -151,7 +151,23 @@
     .pool-head small { color: var(--muted); font-size: 13px; }
     .reset-btn { border: 1px solid #fecdd3; background: #fff1f2; color: #be123c; border-radius: 12px; padding: 8px 14px; font-weight: 700; }
     .pool { display: grid; grid-template-columns: 1fr; gap: 10px; }
-    @media (min-width: 1000px) { .pool { grid-template-columns: 5fr 2fr 3.2fr 2.2fr; } }
+    @media (min-width: 1000px) {
+      .pool { grid-template-columns: 5fr 2fr 3.2fr 2.2fr; }
+      .pool.rhyme-open { grid-template-columns: 5fr 5.2fr 2.2fr; }
+    }
+    .pool.rhyme-open .g-medial, .pool.rhyme-open .g-final { display: none; }
+    .rhyme-toggle {
+      border: 1px solid #99f6e4; background: #f0fdfa; color: #0f766e;
+      border-radius: 12px; padding: 8px 14px; font-weight: 900;
+    }
+    .rhyme-toggle[aria-expanded="true"] { background: #0f766e; color: #fff; border-color: #0f766e; }
+    .g-rhyme { background: #f0fdfa; border-color: #99f6e4; }
+    .g-rhyme h3 { color: #0f766e; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+    .g-rhyme h3 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+    .rhyme-row { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); margin-bottom: 6px; }
+    .card[data-type="rhyme"] { flex-direction: row; font-size: clamp(22px, 2.4vw, 28px); }
+    .card[data-type="rhyme"] .m { color: var(--medial); }
+    .card[data-type="rhyme"] .f { color: var(--final); }
     .group { border-radius: 14px; padding: 10px; border: 1px solid; }
     .group h3 { margin: 0 0 8px; font-size: 14px; font-weight: 900; }
     .g-initial { background: #eff6ff; border-color: #bfdbfe; } .g-initial h3 { color: var(--initial); }
@@ -293,12 +309,20 @@
         <h2>注音符號</h2>
         <small>點一下自動放入，或按住拖曳到上方格子</small>
       </div>
-      <button class="reset-btn" id="reset-btn">↺ 全部清空</button>
+      <div class="row">
+        <button class="rhyme-toggle" id="rhyme-toggle" aria-expanded="false" aria-controls="group-rhyme">結合韻表 ▸</button>
+        <button class="reset-btn" id="reset-btn">↺ 全部清空</button>
+      </div>
     </div>
-    <div class="pool">
+    <div class="pool" id="pool">
       <div class="group g-initial"><h3>聲符（21）</h3><div class="cards" id="pool-initial"></div></div>
       <div class="group g-medial"><h3>介音（3）</h3><div class="cards" id="pool-medial"></div></div>
       <div class="group g-final"><h3>韻符（13）</h3><div class="cards" id="pool-final"></div></div>
+      <!-- 結合韻表：打開時取代介音、韻符欄位，不遮住聲符和聲調 -->
+      <div class="group g-rhyme" id="group-rhyme" hidden>
+        <h3>結合韻（22）<small>點一下：填入介音＋韻符，並唸出結合韻</small></h3>
+        <div id="pool-rhyme"></div>
+      </div>
       <div class="group g-tone"><h3>聲調（5）</h3><div class="cards" id="pool-tone"></div></div>
     </div>
   </section>
@@ -341,6 +365,8 @@
     <div class="rec-grid" id="rec-initial"></div>
     <h3>介音、韻符（選錄：語音念不準時再錄，橘色為建議錄音）</h3>
     <div class="rec-grid" id="rec-symbol"></div>
+    <h3>結合韻（選錄：點結合韻表時播放，橘色為建議錄音）</h3>
+    <div class="rec-grid" id="rec-rhyme"></div>
     <h3>調名（選錄）</h3>
     <div class="rec-grid" id="rec-tone"></div>
     <h3>目前格子裡的字音（選錄）</h3>
@@ -387,9 +413,15 @@ const SYMBOL_CHARS = {
   'ㄚ': '阿', 'ㄛ': '喔', 'ㄜ': '婀', 'ㄝ': '欸', 'ㄞ': '哀', 'ㄟ': '欸', 'ㄠ': '凹',
   'ㄡ': '歐', 'ㄢ': '安', 'ㄣ': '恩', 'ㄤ': '骯', 'ㄥ': '鞥', 'ㄦ': '兒',
 };
+// 結合韻，依介音分三列
+const RHYMES = [
+  'ㄧㄚ ㄧㄛ ㄧㄝ ㄧㄞ ㄧㄠ ㄧㄡ ㄧㄢ ㄧㄣ ㄧㄤ ㄧㄥ'.split(' '),
+  'ㄨㄚ ㄨㄛ ㄨㄞ ㄨㄟ ㄨㄢ ㄨㄣ ㄨㄤ ㄨㄥ'.split(' '),
+  'ㄩㄝ ㄩㄢ ㄩㄣ ㄩㄥ'.split(' '),
+];
 // 找不到好代表字、建議錄音的符號
-const RECORD_SUGGESTED = new Set(['ㄜ', 'ㄝ', 'ㄟ', 'ㄥ']);
-const TYPE_NAME = { initial: '聲符', medial: '介音', final: '韻符', tone: '聲調' };
+const RECORD_SUGGESTED = new Set(['ㄜ', 'ㄝ', 'ㄟ', 'ㄥ', 'ㄧㄝ', 'ㄧㄞ', 'ㄩㄣ']);
+const TYPE_NAME = { initial: '聲符', medial: '介音', final: '韻符', tone: '聲調', rhyme: '結合韻' };
 const STEP_GAP_MS = 450;
 
 const state = { initial: '', medial: '', final: '', tone: null };
@@ -726,6 +758,8 @@ function lightUp(mode, step, index) {
 async function previewSymbol(type, value) {
   stopRun();
   if (type === 'tone') return playStep({ kind: 'tone', key: toneById(value).name });
+  // 結合韻整個一起唸（一聲），不拆開
+  if (type === 'rhyme') return playStep({ kind: 'syllable', key: value });
   if (type === 'initial') {
     const audio = media.audio(value);
     if (audio) return playAudio(audio);
@@ -839,6 +873,7 @@ function renderRecNotice() {
 function place(type, value) {
   stopRun();
   if (type === 'tone') state.tone = value;
+  else if (type === 'rhyme') [state.medial, state.final] = [...value];
   else state[type] = value;
   render();
 }
@@ -852,6 +887,21 @@ function buildPool() {
   for (const t of TONES) {
     $('#pool-tone').appendChild(makeCard('tone', t.id, `${t.glyph}<span class="sub">${t.name}</span>`));
   }
+  for (const row of RHYMES) {
+    const box = document.createElement('div');
+    box.className = 'rhyme-row';
+    for (const r of row) box.appendChild(makeCard('rhyme', r, `<span class="m">${r[0]}</span><span class="f">${r[1]}</span>`));
+    $('#pool-rhyme').appendChild(box);
+  }
+}
+
+function setRhymeOpen(open) {
+  $('#pool').classList.toggle('rhyme-open', open);
+  $('#group-rhyme').hidden = !open;
+  const btn = $('#rhyme-toggle');
+  btn.setAttribute('aria-expanded', String(open));
+  btn.textContent = open ? '結合韻表 ▾ 收起' : '結合韻表 ▸';
+  store.set('zb-rhyme-open', open);
 }
 
 function makeCard(type, value, html) {
@@ -927,8 +977,11 @@ function updateDropHints() {
 }
 
 // 上方的輕聲格只收輕聲；右側聲調格收所有聲調（輕聲會自動移到上方）
-const accepts = (slot, type, value) =>
-  slot.dataset.type === type && !(slot.dataset.pos === 'top' && value !== 5);
+// 結合韻可以拖到介音格或韻符格，兩格一起填入
+const accepts = (slot, type, value) => {
+  if (type === 'rhyme') return slot.dataset.type === 'medial' || slot.dataset.type === 'final';
+  return slot.dataset.type === type && !(slot.dataset.pos === 'top' && value !== 5);
+};
 
 function drop(x, y, type, value) {
   const slot = slotAt(x, y);
@@ -937,7 +990,7 @@ function drop(x, y, type, value) {
     toast('上方這一格只放輕聲「˙」喔！');
     return;
   }
-  if (slot.dataset.type !== type) {
+  if (!accepts(slot, type, value)) {
     toast(`這一格只能放「${TYPE_NAME[slot.dataset.type]}」喔！`);
     return;
   }
@@ -960,6 +1013,7 @@ function recItems() {
   return {
     initial: INITIALS.map(s => ({ key: s, label: s })),
     symbol: [...MEDIALS, ...FINALS].map(s => ({ key: s, label: s, suggest: RECORD_SUGGESTED.has(s) })),
+    rhyme: RHYMES.flat().map(r => ({ key: r, label: r, suggest: RECORD_SUGGESTED.has(r) })),
     tone: TONES.map(t => ({ key: '調:' + t.name, label: t.name })),
     current,
   };
@@ -1177,6 +1231,8 @@ function bindEvents() {
   for (const btn of $$('.mode')) btn.addEventListener('click', () => runMode(btn.dataset.mode));
   $('#result').addEventListener('click', () => runMode('whole'));
   $('#stop-btn').addEventListener('click', stopRun);
+  $('#rhyme-toggle').addEventListener('click', () => setRhymeOpen($('#group-rhyme').hidden));
+  setRhymeOpen(store.get('zb-rhyme-open', false));
   $('#reset-btn').addEventListener('click', () => {
     stopRun();
     Object.assign(state, { initial: '', medial: '', final: '', tone: null });
