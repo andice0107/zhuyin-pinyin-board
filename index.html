@@ -254,6 +254,7 @@
     .help { background: #f8fafc; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
     .help ul { margin: 4px 0 0; padding-left: 20px; }
     .rec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+    .char-btn { border: 1px dashed #a5b4fc; background: #eef2ff; color: #3730a3; border-radius: 8px; padding: 4px 0; font-size: 13px; font-weight: 700; }
     .rec-item { border: 1px solid var(--line); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
     .rec-item.done { background: #f0fdf4; border-color: #86efac; }
     .rec-item.suggest:not(.done) { background: #fff7ed; border-color: #fdba74; }
@@ -403,7 +404,7 @@
 
 <!-- 錄音 -->
 <dialog id="dlg-rec">
-  <div class="dlg-head"><h2>錄音</h2><button class="close-x" data-close>✕</button></div>
+  <div class="dlg-head"><h2>錄音與示範字</h2><button class="close-x" data-close>✕</button></div>
   <div class="dlg-body">
     <p>按「● 錄」開始，唸完再按一次停止（最長 3 秒）。錄好會自動去掉前後空白並播放一次。有錄音的項目一律優先使用錄音。</p>
     <h3>聲符本音（必錄）</h3>
@@ -416,9 +417,12 @@
     <div class="rec-grid" id="rec-tone"></div>
     <h3>目前格子裡的字音（選錄）</h3>
     <div class="rec-grid" id="rec-current"></div>
-    <h3>讓所有裝置共用錄音</h3>
+    <h3>自訂的示範字</h3>
+    <p style="font-size:14px;color:var(--muted)">在上面各項目按「✎ 改示範字」，或在主畫面示範字旁按「✎ 自訂」，就能改成任何一個國字。改過的字列在這裡，也會一起匯出到語音包。</p>
+    <div class="rec-grid" id="rec-chars"></div>
+    <h3>讓所有裝置共用錄音和示範字</h3>
     <div class="help">
-      錄音只存在這台裝置的瀏覽器裡。要讓其他電腦、iPad、手機都能用：
+      錄音和自訂的示範字只存在這台裝置的瀏覽器裡。要讓其他電腦、iPad、手機都能用：
       <ul>
         <li>按「匯出語音包」下載 <b>voice-pack.json</b>，上傳到 GitHub 專案（和 index.html 放在同一層）。之後任何裝置打開網頁都會自動載入。</li>
         <li>或在另一台裝置按「匯入語音包」直接讀入這個檔案。</li>
@@ -511,8 +515,12 @@ const media = {
   local: { audio: store.get('zb-audio', {}), chars: store.get('zb-chars', {}) },
   audio(key) { return this.local.audio[key] || this.pack.audio[key] || null; },
   hasLocal(key) { return Boolean(this.local.audio[key]); },
+  // 老師自訂的示範字（本機優先，其次網站語音包）
+  customChar(key) { return this.local.chars[key] || this.pack.chars[key] || null; },
+  // 介音、韻符單獨唸時的字
+  symbolChar(key) { return this.customChar(key) || SYMBOL_CHARS[key]; },
   charOf(key) {
-    const chosen = this.local.chars[key] || this.pack.chars[key];
+    const chosen = this.customChar(key);
     if (chosen) return chosen;
     if (SYLLABLE_CHARS[key]) return SYLLABLE_CHARS[key][0];
     // 單一介音或韻符念一聲時，用本音代表字
@@ -795,7 +803,7 @@ function resolveStep(step) {
     return text ? { text } : { missing: '有字沒有示範字，請在「語詞文字」輸入這個語詞，或到〔錄音〕錄下來' };
   }
   if (step.kind === 'initial') return { missing: `「${step.key}」的本音還沒錄音` };
-  if (step.kind === 'symbol') return { text: SYMBOL_CHARS[step.key] };
+  if (step.kind === 'symbol') return { text: media.symbolChar(step.key) };
   if (step.kind === 'tone') return { text: step.key };
   const ch = media.charOf(step.key);
   return ch ? { text: ch } : { missing: `「${fmt(step.key)}」沒有適合的示範字，可以到〔錄音〕錄下來` };
@@ -1019,12 +1027,18 @@ function renderResult() {
   }
   const ch = media.charOf(a.key);
   const cands = SYLLABLE_CHARS[a.key] || '';
-  if (!ch) {
-    demo.textContent = '這個字音沒有適合的示範字，可以到〔錄音〕錄下來';
-    return;
-  }
-  demo.innerHTML = `示範字：<b>${ch}</b>`;
-  if (cands.length > 1) {
+  const custom = media.customChar(a.key);
+  const isCustom = Boolean(custom) && !cands.includes(custom);
+  demo.innerHTML = ch
+    ? `示範字：<b>${ch}</b>${isCustom ? '（自訂）' : ''}`
+    : '這個字音沒有示範字，可以自訂一個字或錄音';
+  // 自訂：輸入任何一個國字當示範字
+  const editBtn = document.createElement('button');
+  editBtn.textContent = '✎ 自訂';
+  editBtn.title = '自己輸入一個國字當示範字';
+  editBtn.addEventListener('click', e => { e.stopPropagation(); editChar(a.key); });
+  demo.appendChild(editBtn);
+  if (ch && cands.length > 1) {
     const btn = document.createElement('button');
     btn.textContent = '↻ 換字';
     btn.title = '念起來不對時，換一個同音字試試';
@@ -1250,6 +1264,7 @@ function renderRecDialog() {
     }
     for (const it of list) box.appendChild(recTile(group, it));
   }
+  renderCharList();
 }
 
 function recTile(group, it) {
@@ -1261,7 +1276,7 @@ function recTile(group, it) {
   if (local) status = '已錄音';
   else if (has) status = '語音包';
   else if (group === 'initial') status = '未錄音';
-  else if (group === 'symbol') status = `語音：${SYMBOL_CHARS[it.key]}`;
+  else if (group === 'symbol') status = `語音：${media.symbolChar(it.key)}`;
   else if (group === 'tone') status = '語音念';
   else if (it.key.includes(' ')) status = wordSpeechText(it.key) ? `語音：${wordSpeechText(it.key)}` : '無示範字';
   else status = media.charOf(it.key) ? `語音：${media.charOf(it.key)}` : '無示範字';
@@ -1272,6 +1287,14 @@ function recTile(group, it) {
       <button class="play" ${has ? '' : 'disabled'}>▶ 聽</button>
       <button class="del" ${local ? '' : 'disabled'}>✕ 刪</button>
     </div>`;
+  // 介音、韻符、結合韻、字音都可以自訂示範字（聲符、調名、整個語詞不適用）
+  if (['symbol', 'rhyme', 'current'].includes(group) && !it.key.includes(' ')) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'char-btn';
+    editBtn.textContent = '✎ 改示範字';
+    editBtn.addEventListener('click', () => editChar(it.key));
+    el.appendChild(editBtn);
+  }
   const recBtn = $('.rec', el);
   if (recorder.key === it.key) { recBtn.classList.add('on'); recBtn.textContent = '■ 停'; }
   recBtn.addEventListener('click', () => toggleRecord(it.key));
@@ -1282,6 +1305,61 @@ function recTile(group, it) {
     afterRecordingChange();
   });
   return el;
+}
+
+/* ---------- 自訂示範字 ---------- */
+const isSymbolKey = key => key.length === 1 && Boolean(SYMBOL_CHARS[key]);
+
+function defaultChar(key) {
+  if (isSymbolKey(key)) return SYMBOL_CHARS[key];
+  return SYLLABLE_CHARS[key] ? SYLLABLE_CHARS[key][0] : null;
+}
+
+function editChar(key) {
+  const now = isSymbolKey(key) ? media.symbolChar(key) : media.charOf(key);
+  const input = window.prompt(
+    `「${fmt(key)}」的示範字\n請輸入一個國字（語音會念這個字）。\n清空後按確定 = 還原成預設的字。`, now || '');
+  if (input === null) return;
+  const v = input.trim();
+  if (!v) {
+    delete media.local.chars[key];
+    toast(`「${fmt(key)}」已還原：${media.customChar(key) || defaultChar(key) || '無示範字'}`);
+  } else if (!/^\p{Script=Han}$/u.test(v)) {
+    toast('請只輸入一個國字');
+    return;
+  } else {
+    media.local.chars[key] = v;
+    toast(`「${fmt(key)}」的示範字改成「${v}」`);
+  }
+  media.saveLocal();
+  afterRecordingChange();
+  if (v) playStep(isSymbolKey(key) ? { kind: 'symbol', key } : { kind: 'syllable', key });
+}
+
+function renderCharList() {
+  const box = $('#rec-chars');
+  const keys = [...new Set([...Object.keys(media.pack.chars), ...Object.keys(media.local.chars)])].sort();
+  box.innerHTML = '';
+  if (!keys.length) {
+    box.innerHTML = '<p style="color:var(--muted)">還沒有自訂的示範字。</p>';
+    return;
+  }
+  for (const key of keys) {
+    const local = Boolean(media.local.chars[key]);
+    const el = document.createElement('div');
+    el.className = 'rec-item done';
+    el.innerHTML = `
+      <div class="rec-top"><span class="rec-sym">${fmt(key)}</span>
+        <span class="rec-state"><b style="font-size:20px;color:var(--ink)">${media.customChar(key)}</b><br>${local ? '本機自訂' : '語音包'}</span></div>
+      <div class="rec-btns"><button class="edit">✎ 改</button><button class="del" ${local ? '' : 'disabled'}>↺ 還原</button></div>`;
+    $('.edit', el).addEventListener('click', () => editChar(key));
+    $('.del', el).addEventListener('click', () => {
+      delete media.local.chars[key];
+      media.saveLocal();
+      afterRecordingChange();
+    });
+    box.appendChild(el);
+  }
 }
 
 async function toggleRecord(key) {
