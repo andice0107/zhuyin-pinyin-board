@@ -67,6 +67,16 @@
     .slot-col { display: flex; flex-direction: column; gap: 10px; }
     .slot-row { display: flex; align-items: center; gap: 10px; }
     .slot-tag { font-size: 14px; font-weight: 900; padding: 4px 8px; border-radius: 10px; width: 64px; text-align: center; }
+    .neutral-row { height: 40px; }
+    .neutral-dot {
+      width: clamp(68px, 8vw, 96px); height: 40px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 80px; font-weight: 900; line-height: 0; color: var(--tone);
+      visibility: hidden; transition: box-shadow .2s;
+    }
+    .neutral-dot.on { visibility: visible; }
+    .neutral-dot.lit { box-shadow: 0 0 0 5px var(--glow), 0 0 24px 6px rgba(249,115,22,.55); }
+    .slot .tone-hint { font-size: 12px; font-weight: 700; opacity: .8; }
     .tone-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-left: clamp(14px, 3vw, 28px); border-left: 2px dashed var(--line); }
 
     .slot {
@@ -240,6 +250,8 @@
       <div class="panel-title">直式拼音格 <small>聲符在上、介音在中、韻符在下，聲調在右</small></div>
       <div class="slots">
         <div class="slot-col">
+          <!-- 輕聲點標在符號正上方 -->
+          <div class="slot-row neutral-row"><span class="slot-tag"></span><div class="neutral-dot" id="neutral-dot">˙</div></div>
           <div class="slot-row"><span class="slot-tag tag-initial">聲符</span><div class="slot" data-type="initial"></div></div>
           <div class="slot-row"><span class="slot-tag tag-medial">介音</span><div class="slot" data-type="medial"></div></div>
           <div class="slot-row"><span class="slot-tag tag-final">韻符</span><div class="slot" data-type="final"></div></div>
@@ -708,6 +720,7 @@ function lightUp(mode, step, index) {
   for (const name of step.lit) {
     const el = name === 'result' ? $('#result') : $(`.slot[data-type="${name}"]`);
     if (el) el.classList.add('lit');
+    if (name === 'tone' && state.tone === 5) $('#neutral-dot').classList.add('lit');
   }
   $$(`[data-chips="${mode}"] .chip`).forEach((c, n) => c.classList.toggle('now', n === index));
 }
@@ -741,9 +754,10 @@ function renderSlots() {
     let inner;
     if (type === 'tone') {
       const t = state.tone ? toneById(state.tone) : null;
-      inner = t
-        ? `<span>${t.glyph}</span><span class="tone-name">${t.name}</span>`
-        : `<span class="ph">＋</span><span class="tone-name" style="color:var(--muted)">未選＝一聲</span>`;
+      if (!t) inner = `<span class="ph">＋</span><span class="tone-name" style="color:var(--muted)">未選＝一聲</span>`;
+      else if (t.id === 5) inner = `<span class="tone-name">${t.name}</span><span class="tone-hint">˙標在上方</span>`;
+      else inner = `<span>${t.glyph}</span><span class="tone-name">${t.name}</span>`;
+      $('#neutral-dot').classList.toggle('on', Boolean(t && t.id === 5));
       slot.classList.toggle('filled', Boolean(t));
     } else {
       const v = state[type];
