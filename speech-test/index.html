@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>語音測試</title>
+<style>
+  body { font-family: -apple-system, "PingFang TC", sans-serif; margin: 16px; background: #fff; color: #222; font-size: 18px; }
+  h1 { font-size: 24px; }
+  button { display: block; width: 100%; max-width: 520px; margin: 10px 0; padding: 14px; font-size: 20px; border-radius: 12px; border: 2px solid #3b82f6; background: #eff6ff; text-align: left; }
+  button .n { display: inline-block; width: 2em; font-weight: bold; color: #1d4ed8; }
+  #voices button { border-color: #10b981; background: #ecfdf5; font-size: 18px; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 14px; background: #f3f4f6; padding: 10px; border-radius: 8px; max-width: 520px; }
+  .tip { color: #555; }
+</style>
+</head>
+<body>
+<h1>語音測試</h1>
+<p class="tip">請依序按下面的按鈕，每按一個等 3 秒，記下哪幾個<b>有聲音</b>。最後把整個畫面截圖傳給 Claude。</p>
+
+<button id="b1"><span class="n">1</span>最簡單：直接唸「一二三」</button>
+<button id="b2"><span class="n">2</span>指定台灣中文：唸「四五六」</button>
+<button id="b3"><span class="n">3</span>先開啟網頁音效（像教學板），再唸「七八九」</button>
+<button id="b4"><span class="n">4</span>設定成媒體播放模式（像教學板），再唸「十」</button>
+
+<h2 style="font-size:20px">5. 每個中文語音各試一次</h2>
+<div id="voices"><p class="tip">讀取語音中…</p></div>
+
+<h2 style="font-size:20px">紀錄</h2>
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById('log');
+function log(s) { logEl.textContent += s + '\n'; }
+log('瀏覽器：' + navigator.userAgent);
+log('有語音功能：' + ('speechSynthesis' in window) + '；audioSession：' + (navigator.audioSession ? navigator.audioSession.type : '無'));
+
+function say(text, label, opts = {}) {
+  if (!('speechSynthesis' in window)) { log(label + '：沒有語音功能'); return; }
+  const u = new SpeechSynthesisUtterance(text);
+  if (opts.lang) u.lang = opts.lang;
+  if (opts.voice) { u.voice = opts.voice; u.lang = opts.voice.lang; }
+  const t0 = Date.now();
+  u.onstart = () => log(label + '：開始唸（' + (Date.now() - t0) + 'ms）');
+  u.onend = () => log(label + '：唸完');
+  u.onerror = e => log(label + '：錯誤 ' + e.error);
+  window._keep = u;
+  speechSynthesis.speak(u);
+  log(label + '：送出（speaking=' + speechSynthesis.speaking + '）');
+  setTimeout(() => { if (Date.now() - t0 >= 2900) log(label + '：3 秒後 speaking=' + speechSynthesis.speaking + ' pending=' + speechSynthesis.pending); }, 3000);
+}
+
+document.getElementById('b1').onclick = () => say('一二三', '1');
+document.getElementById('b2').onclick = () => say('四五六', '2', { lang: 'zh-TW' });
+document.getElementById('b3').onclick = () => {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext;
+    window._ctx = window._ctx || new C();
+    window._ctx.resume();
+    const s = window._ctx.createBufferSource(); s.buffer = window._ctx.createBuffer(1, 1, 22050);
+    s.connect(window._ctx.destination); s.start(0);
+    log('3：網頁音效狀態 ' + window._ctx.state);
+  } catch (e) { log('3：網頁音效失敗 ' + e.message); }
+  say('七八九', '3', { lang: 'zh-TW' });
+};
+document.getElementById('b4').onclick = () => {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; log('4：audioSession=' + (navigator.audioSession ? navigator.audioSession.type : '無')); } catch (e) { log('4：設定失敗 ' + e.message); }
+  say('十', '4', { lang: 'zh-TW' });
+};
+
+let n = 0;
+function listVoices() {
+  const vs = speechSynthesis.getVoices().filter(v => /^(zh|cmn|yue)/i.test(v.lang));
+  if (!vs.length) return;
+  const box = document.getElementById('voices'); box.innerHTML = '';
+  vs.forEach((v, i) => {
+    const b = document.createElement('button');
+    b.textContent = '5-' + (i + 1) + '　' + v.name + '（' + v.lang + (v.localService ? '' : '，線上') + '）';
+    b.onclick = () => say('你好，小朋友', '5-' + (i + 1) + ' ' + v.name, { voice: v });
+    box.appendChild(b);
+  });
+  log('中文語音共 ' + vs.length + ' 個');
+}
+listVoices();
+speechSynthesis.addEventListener && speechSynthesis.addEventListener('voiceschanged', listVoices);
+const timer = setInterval(() => { listVoices(); if (++n > 10) clearInterval(timer); }, 500);
+</script>
+</body>
+</html>
