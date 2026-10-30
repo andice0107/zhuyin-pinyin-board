@@ -395,6 +395,7 @@
       <ul>
         <li><b>Windows：</b>用 Edge 開啟最好，選「HsiaoChen（自然）」或「HsiaoYu（自然）」。用 Chrome 選「Google 國語（臺灣）」。如果都沒有，到「設定 → 時間與語言 → 語音 → 新增語音」加入「中文（台灣）」。</li>
         <li><b>iPad / Mac：</b>選「美佳」。若沒有，到「設定 → 輔助使用 → 朗讀內容 → 聲音 → 中文（台灣）」下載「美佳（加強版）」音質更好。</li>
+        <li><b>iPad 完全沒聲音時：</b>① 從右上角往下滑開「控制中心」，確認鈴鐺（靜音）沒有開、音量調大；② 用 Safari 開啟，不要用 App 內建的瀏覽器；③ 重新整理網頁後，先點一下畫面任何地方再試。</li>
         <li><b>Android：</b>到「設定 → 系統 → 語言 → 文字轉語音」，引擎選 Google，語言選「中文（台灣）」並下載語音資料。</li>
       </ul>
       <p style="margin-top:6px">字音是用語音念「代表字」，例如 ㄅㄧㄥˇ 念「丙」。如果某個字音念起來怪，可以在主畫面按「換字」，或到〔錄音〕錄下正確的音。</p>
@@ -555,21 +556,37 @@ function ctx() {
   return audioCtx;
 }
 
-// iOS 需要在使用者第一次觸碰時解鎖聲音
-let unlocked = false;
+// iPad / iPhone 讓網頁聲音不受「靜音模式」影響（iOS 17 以上的 Safari 支援）
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+
+// iOS 只在 touchend、click 這類「真正的點擊」裡才允許開啟聲音（pointerdown 不算），
+// 所以每次點擊都檢查，直到聲音真的開啟為止
+let audioUnlocked = false;
+let speechUnlocked = false;
 function unlockAudio() {
   const c = ctx();
-  if (c && c.state === 'suspended') c.resume();
-  if (unlocked) return;
-  unlocked = true;
-  if ('speechSynthesis' in window) {
+  if (c && !audioUnlocked) {
+    if (c.state !== 'running') c.resume().catch(() => {});
+    try {
+      // 播一段極短的無聲音訊，iOS 才會真正開啟 Web Audio
+      const b = c.createBuffer(1, 1, 22050);
+      const src = c.createBufferSource();
+      src.buffer = b;
+      src.connect(c.destination);
+      src.start(0);
+    } catch {}
+    if (c.state === 'running') audioUnlocked = true;
+  }
+  if (!speechUnlocked && 'speechSynthesis' in window) {
+    speechUnlocked = true;
     const u = new SpeechSynthesisUtterance(' ');
     u.volume = 0;
     speechSynthesis.speak(u);
   }
 }
-document.addEventListener('pointerdown', unlockAudio, { capture: true });
-document.addEventListener('keydown', unlockAudio, { capture: true });
+for (const type of ['touchend', 'click', 'pointerup', 'keydown']) {
+  document.addEventListener(type, unlockAudio, { capture: true });
+}
 
 function decode(c, arrayBuffer) {
   // Safari 舊版只支援 callback 形式
@@ -584,10 +601,25 @@ async function getBuffer(dataUri) {
   return audioBuf;
 }
 
+// Web Audio 沒開啟時（例如舊版 iPad），改用一般的 <audio> 播放
+function playWithElement(dataUri) {
+  return new Promise(resolve => {
+    const a = new Audio(dataUri);
+    const t = setTimeout(resolve, 6000);
+    const done = () => { clearTimeout(t); if (currentElement === a) currentElement = null; resolve(); };
+    a.onended = done;
+    a.onerror = done;
+    currentElement = a;
+    a.play().catch(done);
+  });
+}
+let currentElement = null;
+
 async function playAudio(dataUri) {
   const c = ctx();
-  if (!c) return;
-  if (c.state === 'suspended') await c.resume();
+  if (!c) return playWithElement(dataUri);
+  if (c.state !== 'running') { try { await c.resume(); } catch {} }
+  if (c.state !== 'running') return playWithElement(dataUri);
   let buf;
   try { buf = await getBuffer(dataUri); } catch { toast('錄音檔無法播放'); return; }
   return new Promise(resolve => {
@@ -688,13 +720,24 @@ function speak(text) {
     u.onend = finish;
     u.onerror = finish;
     speech.keep.push(u);
-    speechSynthesis.speak(u);
+    // Safari（iPad / Mac）在 cancel() 之後馬上 speak() 會把新的句子吃掉，所以剛停止過就稍等一下
+    const wait = Math.max(0, lastCancel + 150 - Date.now());
+    const go = () => {
+      if (speechSynthesis.paused) speechSynthesis.resume();   // iOS 切回網頁後可能卡在暫停
+      speechSynthesis.speak(u);
+    };
+    if (wait) setTimeout(go, wait); else go();
   });
 }
 
+let lastCancel = 0;
 function stopSound() {
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  if ('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) {
+    speechSynthesis.cancel();
+    lastCancel = Date.now();
+  }
   if (currentSource) { try { currentSource.stop(); } catch {} currentSource = null; }
+  if (currentElement) { try { currentElement.pause(); } catch {} currentElement = null; }
 }
 
 /* ================= 拼音分析 ================= */
