@@ -434,6 +434,7 @@ const current = () => S.history[S.idx] || null;
    4. 電腦語音（TTS）
    ========================================================= */
 let ttsVoice = null;
+let lastCancel = 0;
 // 語音挑選順序與「注音拼音教學板」相同：只用臺灣中文語音，自然語音優先
 function voiceScore(v) {
   const lang = (v.lang || "").replace("_", "-").toLowerCase();
@@ -462,7 +463,7 @@ if ("speechSynthesis" in window) { speechSynthesis.onvoiceschanged = initVoice; 
 function ttsSay(text, token) {
   return new Promise(resolve => {
     if (!("speechSynthesis" in window) || token !== playToken) return resolve();
-    speechSynthesis.cancel();
+    if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); lastCancel = Date.now(); }
     const u = new SpeechSynthesisUtterance(text);
     if (!ttsVoice) initVoice();
     if (ttsVoice) u.voice = ttsVoice;
@@ -471,7 +472,10 @@ function ttsSay(text, token) {
     const end = () => { if (!done) { done = true; resolve(); } };
     u.onend = end; u.onerror = end;
     setTimeout(end, 3000 + text.length * 800 / S.rate);   // 某些瀏覽器不觸發 onend
-    speechSynthesis.speak(u);
+    // Safari 在 cancel() 後馬上 speak() 會把句子吃掉，稍等一下再唸
+    const go = () => { if (speechSynthesis.paused) speechSynthesis.resume(); speechSynthesis.speak(u); };
+    const wait = Math.max(0, lastCancel + 150 - Date.now());
+    if (wait) setTimeout(go, wait); else go();
   });
 }
 
@@ -634,26 +638,62 @@ function ctx() {
   if (!audioCtx && AC) audioCtx = new AC();
   return audioCtx;
 }
-// iPad / Safari 要在使用者第一次點擊時解鎖聲音
+// iPad / iPhone：聲音不受靜音模式影響（iOS 17 以上），並在真正的點擊（touchend、click）時開啟聲音
+try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+let speechUnlocked = false;
 function unlockAudio() {
   const c = ctx();
-  if (c && c.state === "suspended") c.resume();
+  if (c && c.state !== "running") {
+    c.resume().catch(() => {});
+    try {
+      const src = c.createBufferSource();
+      src.buffer = c.createBuffer(1, 1, 22050);
+      src.connect(c.destination);
+      src.start(0);
+    } catch (e) {}
+  }
+  if (!speechUnlocked && "speechSynthesis" in window) {
+    speechUnlocked = true;
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  }
 }
-document.addEventListener("pointerdown", unlockAudio, { capture: true });
-document.addEventListener("keydown", unlockAudio, { capture: true });
+["touchend", "click", "pointerup", "keydown"].forEach(t => document.addEventListener(t, unlockAudio, { capture: true }));
 
 function stopAll() {
   playToken++;
   if (currentSource) { try { currentSource.stop(); } catch (e) {} currentSource = null; }
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  if ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending)) {
+    speechSynthesis.cancel();
+    lastCancel = Date.now();
+  }
   clearHighlights();
   $("speakBtn").classList.remove("playing");
 }
 
+function playWithElement(blob, token) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(t); clearInterval(watch); URL.revokeObjectURL(url); resolve();
+    };
+    const t = setTimeout(done, 6000);
+    const watch = setInterval(() => { if (token !== playToken) { a.pause(); done(); } }, 100);   // 按了停止或換題
+    a.onended = done; a.onerror = done;
+    a.play().catch(done);
+  });
+}
+
 async function playClip(blob, token) {
   const c = ctx();
-  if (!c || token !== playToken) return;
-  if (c.state === "suspended") { try { await c.resume(); } catch (e) {} }
+  if (token !== playToken) return;
+  if (c && c.state !== "running") { try { await c.resume(); } catch (e) {} }
+  if (!c || c.state !== "running") return playWithElement(blob, token);   // Web Audio 沒開啟時改用 <audio>
   let buf = decoded.get(blob);
   if (!buf) {
     try {
