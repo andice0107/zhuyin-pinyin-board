@@ -562,7 +562,6 @@ try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } ca
 // iOS 只在 touchend、click 這類「真正的點擊」裡才允許開啟聲音（pointerdown 不算），
 // 所以每次點擊都檢查，直到聲音真的開啟為止
 let audioUnlocked = false;
-let speechUnlocked = false;
 function unlockAudio() {
   const c = ctx();
   if (c && !audioUnlocked) {
@@ -577,12 +576,7 @@ function unlockAudio() {
     } catch {}
     if (c.state === 'running') audioUnlocked = true;
   }
-  if (!speechUnlocked && 'speechSynthesis' in window) {
-    speechUnlocked = true;
-    const u = new SpeechSynthesisUtterance(' ');
-    u.volume = 0;
-    speechSynthesis.speak(u);
-  }
+  // 語音不在這裡預先開啟：預先唸的空白句會被接下來的「停止」打斷，反而讓 iPad 的第一句唸不出來
 }
 for (const type of ['touchend', 'click', 'pointerup', 'keydown']) {
   document.addEventListener(type, unlockAudio, { capture: true });
@@ -700,33 +694,57 @@ function renderVoiceSelect() {
   }
 }
 
+// 回傳 Promise：唸完時 resolve(true)；完全沒開始唸時 resolve(false)
 function speak(text) {
   return new Promise(resolve => {
-    if (!('speechSynthesis' in window) || !text) { resolve(); return; }
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = speech.voice ? speech.voice.lang : 'zh-TW';
-    if (speech.voice) u.voice = speech.voice;
-    u.rate = speech.rate;
+    if (!('speechSynthesis' in window) || !text) { resolve(false); return; }
+    let started = false;
     let finished = false;
-    // 有些裝置（特別是 iOS）不一定會觸發 onend，用逾時保底
-    const t = setTimeout(() => finish(), 3000 + text.length * 800 / speech.rate);
+    let retried = false;
+    let t = null;
     function finish() {
       if (finished) return;
       finished = true;
       clearTimeout(t);
-      speech.keep = speech.keep.filter(x => x !== u);
-      resolve();
+      clearTimeout(check);
+      speech.keep = [];
+      resolve(started);
     }
-    u.onend = finish;
-    u.onerror = finish;
-    speech.keep.push(u);
-    // Safari（iPad / Mac）在 cancel() 之後馬上 speak() 會把新的句子吃掉，所以剛停止過就稍等一下
-    const wait = Math.max(0, lastCancel + 150 - Date.now());
-    const go = () => {
+    function make(useVoice) {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = speech.voice ? speech.voice.lang : 'zh-TW';
+      if (useVoice && speech.voice) u.voice = speech.voice;
+      u.rate = speech.rate;
+      u.onstart = () => { started = true; };
+      u.onend = finish;
+      u.onerror = e => { if (!retried && !started && useVoice) retry(); else finish(); };
+      speech.keep.push(u);   // 保留參照，避免被回收後不觸發 onend
+      return u;
+    }
+    function say(u) {
+      // iPad：Web Audio 開著時，語音有時會被它佔住而沒有聲音，唸之前先讓 Web Audio 休息
+      if (audioCtx && audioCtx.state === 'running' && !currentSource) audioCtx.suspend().catch(() => {});
       if (speechSynthesis.paused) speechSynthesis.resume();   // iOS 切回網頁後可能卡在暫停
       speechSynthesis.speak(u);
-    };
-    if (wait) setTimeout(go, wait); else go();
+      clearTimeout(t);
+      // 有些裝置（特別是 iOS）不一定會觸發 onend，用逾時保底
+      t = setTimeout(finish, 3000 + text.length * 800 / speech.rate);
+    }
+    // 指定的語音（例如美佳）在部分 iPad 上唸不出來：1.5 秒內沒開始，就改用系統預設的中文語音再唸一次
+    function retry() {
+      retried = true;
+      speech.useVoiceObject = false;
+      speechSynthesis.cancel();
+      lastCancel = Date.now();
+      setTimeout(() => { if (!finished) say(make(false)); }, 150);
+    }
+    const check = setTimeout(() => {
+      if (!started && !finished && !retried && speech.useVoiceObject !== false) retry();
+    }, 1500);
+    const first = make(speech.useVoiceObject !== false);
+    // Safari（iPad / Mac）在 cancel() 之後馬上 speak() 會把新的句子吃掉，所以剛停止過就稍等一下
+    const wait = Math.max(0, lastCancel + 150 - Date.now());
+    if (wait) setTimeout(() => say(first), wait); else say(first);
   });
 }
 
@@ -1687,10 +1705,15 @@ function bindEvents() {
 
   $('#voice-select').addEventListener('change', e => {
     speech.voice = speech.voices.find(v => v.voiceURI === e.target.value) || null;
+    speech.useVoiceObject = true;   // 換了語音就重新試試指定語音
     store.set('zb-voice', e.target.value);
     updateVoiceBadge();
   });
-  $('#voice-test').addEventListener('click', () => { stopRun(); speak('學習注音真有趣'); });
+  $('#voice-test').addEventListener('click', async () => {
+    stopRun();
+    const ok = await speak('學習注音真有趣');
+    if (!ok) toast('這台裝置沒有唸出語音。iPad 請確認：控制中心的靜音（鈴鐺）已關閉、音量調大，並用 Safari 開啟');
+  });
   const rate = $('#rate');
   rate.value = speech.rate;
   $('#rate-val').textContent = speech.rate.toFixed(2);
