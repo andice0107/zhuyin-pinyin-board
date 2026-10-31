@@ -289,7 +289,7 @@
     <div class="stars" id="sumStars"></div>
     <p id="sumText"></p>
     <div id="sumList"></div>
-    <p class="note">⭐ 一次就答對　🌟 多試幾次答對　💡 一起學會了　🚀 下次再挑戰</p>
+    <p class="note">⭐ 一次就答對　🌟 多試幾次答對　💡 看答案學會　⏭ 跳過（不算答對）</p>
     <div class="sumBtns"><button class="btn primary" id="restartBtn">🔁 再抽題</button><button class="btn" id="homeBtn">🏠 回到開始頁</button></div>
   </div>
 </div>
@@ -1990,24 +1990,30 @@ function skip() {
 function showSummary() {
   stopAll();
   const c = o => results.filter(r => r.outcome === o).length;
-  const n = results.length || 1, right = c("first") + c("ok"), ratio = right / n;
+  const total = results.length || 1, right = c("first") + c("ok"), skip = c("skip"), reveal = c("reveal");
+  const ratio = right / total;            // 跳過、看答案都不算答對
   const pick = a => a[Math.floor(Math.random() * a.length)];
   let cheer, title;
-  if (ratio >= .9) { cheer = pick(["🏆", "👑", "🥇"]); title = pick(["太厲害了！你是注音小達人！", "全都難不倒你，超級棒！", "耳朵好靈，拼得好準！"]); }
-  else if (ratio >= .6) { cheer = pick(["🎉", "🌟", "💪"]); title = pick(["好棒！你越來越會聽了！", "做得很好，再玩一次會更厲害！", "很棒喔！你的耳朵在進步！"]); }
-  else { cheer = pick(["🌈", "🌱", "🤗"]); title = pick(["你很努力！每練一次都在進步！", "謝謝你認真聽，下一回一定更棒！", "一起加油！多聽幾次就會越來越熟！"]); }
+  if (right === results.length && results.length) { cheer = pick(["🏆", "👑", "🥇"]); title = pick(["全部答對！你是注音小達人！", "全都拼對了，超級厲害！"]); }
+  else if (ratio >= .7) { cheer = pick(["🎉", "🌟", "💪"]); title = pick(["好棒！大部分都拼對了！", "做得很好！差一點點就全對了！"]); }
+  else if (right > 0) { cheer = pick(["🌈", "🌱", "😊"]); title = pick(["你拼對了好幾題，繼續加油！", "有進步喔！多聽幾次會越來越熟！"]); }
+  else if (skip === results.length) { cheer = pick(["🚀", "🌱", "🤗"]); title = pick(["這一回都先跳過了，下一回試著拼拼看！", "沒關係！聽一聽、試一試，你一定可以！"]); }
+  else { cheer = pick(["🌱", "🤗", "🌈"]); title = pick(["你很努力！每練一次都在進步！", "一起加油！多聽幾次就會越來越熟！"]); }
   $("sumCheer").textContent = cheer;
   $("sumTitle").textContent = title;
-  const icon = { first: "⭐", ok: "🌟", reveal: "💡", skip: "🚀" };
+  const icon = { first: "⭐", ok: "🌟", reveal: "💡", skip: "⏭" };
   $("sumStars").textContent = results.map(r => icon[r.outcome]).join("");
-  $("sumText").innerHTML = `你完成了 <b>${results.length}</b> 題！拼對了 <b>${right}</b> 題` + (c("first") ? `，其中 <b>${c("first")}</b> 題一次就答對` : "") +
-    (c("reveal") ? `，還一起學會了 <b>${c("reveal")}</b> 個字音` : "") + "。";
+  const parts = [`答對 <b>${right}</b> 題` + (c("first") ? `（一次就答對 <b>${c("first")}</b> 題）` : "")];
+  if (reveal) parts.push(`看答案學會 <b>${reveal}</b> 題`);
+  if (skip) parts.push(`跳過 <b>${skip}</b> 題`);
+  $("sumText").innerHTML = `這一回共 <b>${results.length}</b> 題：` + parts.join("、") + "。" +
+    (skip ? `<br><span class="note">跳過的題目不算答對，下一回可以再挑戰！</span>` : "");
   $("restartBtn").textContent = `🔁 再抽 ${S.countAll ? "全部" : wantCount()} 題`;
-  confetti(ratio >= .6 ? 40 : 24);
+  if (right) confetti(ratio >= .7 ? 40 : 18);
   $("sumList").innerHTML = results.map(r => `<div>${icon[r.outcome]} ${esc(r.q.word)}<span class="note">（${esc(r.q.targets.map(i => r.q.syls[i].raw).join(" "))}）</span></div>`).join("");
   $("progress").textContent = `${ORDER.length} / ${ORDER.length} 題`;
   $("sumOv").hidden = false;
-  sfxGood();
+  if (right) sfxGood();
 }
 function confetti(k) {
   const bits = ["🎉", "⭐", "🌟", "🎈", "✨", "🍬", "💛"];
