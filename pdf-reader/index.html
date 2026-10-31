@@ -127,6 +127,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
     <label class="chk"><input type="checkbox" id="autoRead">選好就朗讀</label>
     <label class="chk"><input type="checkbox" id="contRead">讀完接著讀下一句</label>
     <label class="chk"><input type="checkbox" id="skipZhuyin">略過注音符號</label>
+    <label class="chk" title="考「寫注音」的題目，格子裡印著大大的國字，唸出來等於說出答案"><input type="checkbox" id="skipBox">不唸格子裡的考題大字</label>
     <label class="chk" title="有些考卷會把答案用看不見的字藏在答案格裡"><input type="checkbox" id="readHidden">唸出看不見的字</label>
   </div>
   <div class="opt grp">
@@ -198,6 +199,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
     <li>上方的「⚙ 收合設定」可以把設定列收起來，只留播放按鈕，畫面比較大。</li>
     <li>iPad 沒有聲音時，請先關閉 iPad 的靜音模式。</li>
     <li>多欄或上下分區的版面，工具會先把區塊分開，一區讀完再讀下一區。</li>
+    <li>「寫注音」的考題，格子裡會印一個大大的國字（例如「轉」）。工具預設<b>不唸</b>這種格子裡單獨的大字，免得學生聽到讀音就知道答案；取消勾選「不唸格子裡的考題大字」才會唸。</li>
     <li>有些考卷會把答案用「看不見的字」藏在答案格裡。工具預設<b>不唸</b>這些字，免得把答案唸出來；勾選「唸出看不見的字」才會唸（例如國字注音題想讓學生聽到讀音時）。</li>
     <li>「略過注音符號」會跳過文件裡另外排上去的ㄅㄆㄇ注音，只讀國字。</li>
   </ul>
@@ -290,6 +292,7 @@ const S = {
   contRead: store.get('contRead', false),
   skipZhuyin: store.get('skipZhuyin', true),
   readHidden: store.get('readHidden', false),
+  skipBox: store.get('skipBox', true),
 };
 
 const $ = id => document.getElementById(id);
@@ -476,6 +479,7 @@ async function extractPage(pg){
     }
   }
   pg.chars = await markHiddenChars(pg, chars);
+  markBoxChars(pg.chars);
   pg.vertFont = Object.values(tc.styles).some(st => st.vertical);
   if (!chars.length) {
     const b = document.createElement('div'); b.className = 'notext';
@@ -514,6 +518,20 @@ async function markHiddenChars(pg, chars){
     cv.width = cv.height = 0;
     return kept;
   } catch(e){ console.warn('hidden check', e); return chars; }
+}
+
+// 考「寫注音」的題目：答案格裡單獨印一個特別大的國字（例如「轉」）。
+// 比內文大很多、旁邊又沒有同樣大的字 → 標記 c.box，預設不唸，免得把答案唸出來。
+function markBoxChars(chars){
+  const med = median(chars.filter(c => /[\p{L}\p{N}]/u.test(c.t)).map(c => c.s));
+  if (!med) return;
+  for (const c of chars) {
+    c.box = false;
+    if (c.s < 1.8 * med || !/\p{Script=Han}/u.test(c.t)) continue;
+    const lone = !chars.some(o => o !== c && Math.abs(o.s - c.s) < 0.15 * c.s && /[\p{L}\p{N}]/u.test(o.t) &&
+      Math.hypot(o.cx - c.cx, o.cy - c.cy) < 1.25 * c.s);
+    c.box = lone;
+  }
 }
 
 // ---------- 依閱讀方向排序 ----------
@@ -706,7 +724,7 @@ function canJoin(i){
   if (n2 && (n2.t === '、' || n2.t === '.' || n2.t === '．')) return false;
   return true;
 }
-function usable(c){ return !(S.skipZhuyin && c.zy) && !(c.hid && !S.readHidden); }
+function usable(c){ return !(S.skipZhuyin && c.zy) && !(c.hid && !S.readHidden) && !(c.box && !c.hid && S.skipBox); }
 function rebuildStream(){
   stream = []; sentences = [];
   let lineId = 0;
@@ -1171,11 +1189,11 @@ function setMode(v){
   document.body.dataset.mode = v;
 }
 $('modeSel').onchange = e => setMode(e.target.value);
-[['autoRead', 'autoRead'], ['contRead', 'contRead'], ['skipZhuyin', 'skipZhuyin'], ['readHidden', 'readHidden']].forEach(([id, k]) => {
+[['autoRead', 'autoRead'], ['contRead', 'contRead'], ['skipZhuyin', 'skipZhuyin'], ['readHidden', 'readHidden'], ['skipBox', 'skipBox']].forEach(([id, k]) => {
   const el = $(id); el.checked = S[k];
   el.onchange = () => {
     S[k] = el.checked; store.set(k, S[k]);
-    if ((k === 'skipZhuyin' || k === 'readHidden') && pages.length) { stopReading(); rebuildStream(); }
+    if ((k === 'skipZhuyin' || k === 'readHidden' || k === 'skipBox') && pages.length) { stopReading(); rebuildStream(); }
     if (k === 'contRead' && (R.playing || R.paused)) R.cont = S[k];
   };
 });
