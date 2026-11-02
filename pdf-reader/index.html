@@ -159,7 +159,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/02-E）</span>
+  <span id="status">尚未開啟檔案（版本 11/02-F）</span>
   <span id="nowText"></span>
 </footer>
 <div id="pron"><div class="card">
@@ -311,7 +311,7 @@ const ZHUYIN_RE = /[㄀-ㄯㆠ-ㆿˇˊˋ˙]/;
 const LATIN_RE = /[A-Za-z0-9À-ɏ]/;
 const END_SET = new Set(['。','！','？','!','?','；',';','｡']);
 const CLOSE_SET = new Set(['」','』','）',')','”','’','〉','》','】','〕','"','\'','﹂','﹄','︶','︸','︺','︼','︾','﹀']);
-const LIST_RE = /^([一二三四五六七八九十]+、|[(（]|[①-⑳]|\d+[.．、])/;
+const LIST_RE = /^([一二三四五六七八九十]+、|[(（]|[①-⑳]|\d+[.．、]|\d{1,2}○|○\d)/;
 const HANG_SET = new Set(['，','。','、','；','：','！','？',',','.',';',':','!','?','」','』','﹂','﹄','︒','︑','︐']);
 const SOFT_SET = new Set(['，','、','：',',',':','﹐','﹑']);
 
@@ -719,15 +719,25 @@ function splitRegion(chars, dir, depth){
   if (!best) {
     // 找不到能整頁切開的欄距，可能是「標題、兩欄、標題、兩欄…」上下疊在一起：
     // 用最像欄距的那條線，把橫跨它的行當成分隔，切成上下好幾段，每段再各自找欄
-    let bandP = null, bandScore = 0;
+    let bandP = null, bandScore = -Infinity;
     for (const P of cands) {
-      let nClean = 0, nSplit = 0, nCross = 0;
+      let nClean = 0, nSplit = 0, nCross = 0, sc = 0;
+      const starts = [];
       for (const ln of lines) {
         const {L, Rr, straddle} = cut(ln, P);
         if (straddle) { nCross++; continue; }
-        if (L.length && Rr.length) { nSplit++; if (lo(Rr[0]) - hi(L[L.length - 1]) >= 1.5 * ln.s) nClean++; }
+        if (L.length && Rr.length) {
+          nSplit++;
+          const g = (lo(Rr[0]) - hi(L[L.length - 1])) / ln.s;
+          if (g >= 1.5) { nClean++; sc += Math.min(g, 6); starts.push([lo(Rr[0]), ln.s]); }
+        }
       }
-      if (nClean >= 3 && nClean >= 0.6 * nSplit && nCross && nClean - nCross > bandScore) { bandScore = nClean - nCross; bandP = P; }
+      // 欄距越寬、整齊分開的行越多，越像真正的欄
+      // 右欄的開頭要對齊（真正的欄是一條直線；一般文字裡剛好有空格的地方不會對齊）
+      if (nClean < 3) continue;
+      const mid = median(starts.map(x => x[0]));
+      const aligned = starts.filter(([x, sz]) => Math.abs(x - mid) < 2.5 * sz).length;
+      if (aligned >= 3 && aligned >= 0.7 * nClean && nClean >= 0.6 * nSplit && nCross && sc > bandScore) { bandScore = sc; bandP = P; }
     }
     if (bandP === null) return [chars];
     // 只有真的伸進右欄的行才算分隔（左欄裡剛好比較長的一行不算）：和上下最近的分欄行比較右欄從哪裡開始
@@ -761,7 +771,18 @@ function splitRegion(chars, dir, depth){
     }
     if (cur.length) bands.push(cur);
     if (bands.length < 2) return [chars];
-    return bands.flatMap(b => b.length === 1 ? [b[0].chars.slice().sort((x, y) => along(x) - along(y))] : splitRegion(b.flatMap(l => l.chars), dir, depth + 1));
+    // 每段各自找欄；沒有真的分成兩欄的段落再合併回去，不要平白多出段落分隔
+    const out = [];
+    let plain = [], anySplit = false;
+    for (const b of bands) {
+      const r = b.length === 1 ? [b[0].chars] : splitRegion(b.flatMap(l => l.chars), dir, depth + 1);
+      if (r.length === 1) { plain.push(...r[0]); continue; }
+      anySplit = true;
+      if (plain.length) { out.push(plain); plain = []; }
+      out.push(...r);
+    }
+    if (plain.length) out.push(plain);
+    return anySplit ? out : [chars];
   }
   // 夾在邊欄旁邊的零星字（例如年份數字）併回那一欄
   for (const L of [best.A, best.B]) for (let i = L.length - 1; i >= 0; i--) {
@@ -822,7 +843,7 @@ function rebuildStream(){
     const c = stream[i], n = stream[i + 1];
     let end = !n || ((n.pg !== c.pg || c.br === 2) && !canJoin(i));
     // 英文句點：前面是英文字母（不是題號「1.」、小數點），而且後面是空白或換行，才算一句結束
-    const engStop = c.t === '.' && i > 0 && /[A-Za-z)]/.test(stream[i - 1].t) && (!n || c.sp || n.lid !== c.lid || /[A-Z(（]/.test(n.t)) && !/^(Mr|Mrs|Ms|Dr|St)$/.test(textOf(Math.max(0, i - 3), i - 1).replace(/.*\s/, ''));
+    const engStop = c.t === '.' && i > 0 && /[A-Za-z)_]/.test(stream[i - 1].t) && (!n || c.sp || n.lid !== c.lid || /[A-Z(（]/.test(n.t)) && !/^(Mr|Mrs|Ms|Dr|St)$/.test(textOf(Math.max(0, i - 3), i - 1).replace(/.*\s/, ''));
     // 「at 6:00.」這種數字結尾、而且是一行的最後一個字，也算一句結束（題號「1.」後面同一行還有字，不算）
     const numStop = c.t === '.' && i > 3 && /\d/.test(stream[i - 1].t) && n && n.lid !== c.lid && stream[i - 3].lid === c.lid && /[A-Za-z]/.test(textOf(Math.max(0, i - 12), i - 1));
     if (!end && (END_SET.has(c.t) || engStop || numStop)) {
