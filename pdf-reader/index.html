@@ -1058,6 +1058,9 @@ function ghErr(e){ return e.message === 'noaccess' ? '❌ 連不進你的讀音�
 // 下載：把雲端的表抓下來，蓋過這台設備的表
 async function ghPull(){
   if (!ghLinked() || gh.busy) return;
+  // 之前沒網路時存在這台設備、還沒上傳的修改，先補上傳
+  const pending = store.get('ghPending', []);
+  if (pending.length) return ghPush([]);
   gh.busy = true; ghSay('🔄 同步中…');
   try { const {rules} = await ghGet(); pronRules = rules; store.set('pron', pronRules); ghSay('✅ 已登入 ' + gh.repo + '，和雲端同步（共 ' + rules.length + ' 筆）'); }
   catch(e){ ghSay(ghErr(e)); }
@@ -1066,6 +1069,8 @@ async function ghPull(){
 // 上傳：先抓最新的雲端表，再把這次的修改套上去，避免蓋掉其他設備剛存的修正
 async function ghPush(ops){
   if (!ghLinked()) return;
+  ops = store.get('ghPending', []).concat(ops);
+  store.set('ghPending', ops);
   gh.busy = true; ghSay('🔄 儲存到雲端中…');
   for (let tries = 0; tries < 3; tries++) {
     try {
@@ -1077,10 +1082,10 @@ async function ghPush(ops){
       if (r.status === 409 || r.status === 422) continue;
       if (r.status === 401 || r.status === 403 || r.status === 404) throw new Error('noaccess');
       if (!r.ok) throw new Error('http' + r.status);
-      pronRules = next; store.set('pron', pronRules);
+      pronRules = next; store.set('pron', pronRules); store.set('ghPending', []);
       ghSay('✅ 已存到雲端（共 ' + next.length + ' 筆）');
       gh.busy = false; renderPron(); return;
-    } catch(e){ ghSay(ghErr(e) + ' 這次的修改先存在這台設備。'); break; }
+    } catch(e){ ghSay(ghErr(e) + ' 這次的修改先存在這台設備，下次連上網路會自動補上傳。'); break; }
   }
   gh.busy = false; renderPron();
 }
@@ -1340,7 +1345,8 @@ $('ghLink').onclick = async () => {
 $('ghSync').onclick = () => ghPull();
 $('ghUnlink').onclick = () => {
   if (!confirm('要登出嗎？這台設備上的讀音表和金鑰都會清除（雲端上的表不受影響，下次登入就會回來）。')) return;
-  gh.repo = gh.token = gh.state = ''; store.set('ghRepo', ''); store.set('ghToken', '');
+  if (store.get('ghPending', []).length && !confirm('有修改還沒上傳到雲端（可能剛才沒網路）。登出的話這些修改會不見，確定要登出嗎？')) return;
+  gh.repo = gh.token = gh.state = ''; store.set('ghRepo', ''); store.set('ghToken', ''); store.set('ghPending', []);
   pronRules = []; store.set('pron', []); renderPron();
 };
 $('pronBtn').onclick = () => {
