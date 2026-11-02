@@ -159,7 +159,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/02-D）</span>
+  <span id="status">尚未開啟檔案（版本 11/02-E）</span>
   <span id="nowText"></span>
 </footer>
 <div id="pron"><div class="card">
@@ -513,8 +513,11 @@ async function markHiddenChars(pg, chars){
     // 只檢查字的中間偏左那一塊（注音字型的國字在左邊、注音在右邊；答案格的外框也不會碰到這裡）
     const kept = chars.filter(c => {
       if (!/[\p{L}\p{N}]/u.test(c.t)) return true;   // 標點符號太小，不檢查
-      const x0 = Math.max(0, Math.floor((c.x + c.w * 0.22) * sc)), x1 = Math.min(W - 1, Math.ceil((c.x + c.w * 0.58) * sc));
-      const y0 = Math.max(0, Math.floor((c.y + c.h * 0.22) * sc)), y1 = Math.min(Hh - 1, Math.ceil((c.y + c.h * 0.78) * sc));
+      // 英文、數字是比例字型，每個字母的位置只是估計，所以檢查整個字的範圍
+      const han = !/[A-Za-z0-9]/.test(c.t);
+      const fx0 = han ? 0.22 : 0, fx1 = han ? 0.58 : 1, fy0 = han ? 0.22 : 0.1, fy1 = han ? 0.78 : 0.9;
+      const x0 = Math.max(0, Math.floor((c.x + c.w * fx0) * sc)), x1 = Math.min(W - 1, Math.ceil((c.x + c.w * fx1) * sc));
+      const y0 = Math.max(0, Math.floor((c.y + c.h * fy0) * sc)), y1 = Math.min(Hh - 1, Math.ceil((c.y + c.h * fy1) * sc));
       if (x1 < x0 || y1 < y0) return true;
       let ink = 0;
       for (let y = y0; y <= y1 && ink < 2; y++) for (let x = x0; x <= x1; x++) {
@@ -524,6 +527,15 @@ async function markHiddenChars(pg, chars){
       c.hid = ink < 2;
       return true;
     });
+    // 同一個英文單字（或一串數字）只要有一個字母看得到，整個字都算看得到
+    for (let i = 0; i < chars.length; ) {
+      let j = i;
+      if (/[A-Za-z0-9]/.test(chars[i].t)) {
+        while (j + 1 < chars.length && /[A-Za-z0-9'’]/.test(chars[j + 1].t) && Math.abs(chars[j + 1].cy - chars[j].cy) < 0.5 * chars[j].s && chars[j + 1].x - (chars[j].x + chars[j].w) < 0.3 * chars[j].s && chars[j + 1].x >= chars[j].x) j++;
+        if (j > i && chars.slice(i, j + 1).some(c => c.hid === false)) for (let k = i; k <= j; k++) if (/[A-Za-z0-9]/.test(chars[k].t)) chars[k].hid = false;
+      }
+      i = j + 1;
+    }
     cv.width = cv.height = 0;
     return kept;
   } catch(e){ console.warn('hidden check', e); return chars; }
@@ -644,26 +656,30 @@ function splitRegion(chars, dir, depth){
       if (i === core.length - 1 || lo(core[i + 1]) - hi(core[i]) >= 0.6 * ln.s) cands.add(hi(core[i]));
     }
   }
+  const cut = (ln, P) => {
+    const L = [], Rr = [];
+    let straddle = false;
+    for (const c of ln.chars) {
+      if (!isCore(c)) continue;
+      if (hi(c) <= P + 0.01) L.push(c); else if (lo(c) > P) Rr.push(c); else { straddle = true; break; }
+    }
+    // 兩半之間幾乎沒有空白 → 是連續的一行字剛好被切到，整行算「橫跨」
+    if (!straddle && L.length && Rr.length && lo(Rr[0]) - hi(L[L.length - 1]) < 0.6 * ln.s) straddle = true;
+    // 「（　　）」作答空格：左邊是開括號、右邊是關括號，中間的空白不是欄距
+    if (!straddle && L.length && Rr.length && OPEN_PAREN.has(L[L.length - 1].t) && CLOSE_PAREN.has(Rr[0].t)) straddle = true;
+    // 「11. (」這種題號：數字後面接句點，空白只是題號和題目之間的距離
+    if (!straddle && L.length && Rr.length && /^[0-9０-９]$/.test(L[L.length - 1].t)) {
+      const a = hi(L[L.length - 1]), b = lo(Rr[0]);
+      if (ln.chars.some(c => (c.t === '.' || c.t === '．') && lo(c) >= a - 0.1 * ln.s && hi(c) <= b + 0.1 * ln.s && lo(c) - a < 0.5 * ln.s && b - hi(c) < 1.2 * ln.s)) straddle = true;
+    }
+    return {L, Rr, straddle};
+  };
   let best = null;
   for (const P of cands) {
     const A = [], B = [], C = [];
     let minR = Infinity, bad = false, nSplit = 0, nClean = 0;
     for (const ln of lines) {
-      const L = [], Rr = [];
-      let straddle = false;
-      for (const c of ln.chars) {
-        if (!isCore(c)) continue;
-        if (hi(c) <= P + 0.01) L.push(c); else if (lo(c) > P) Rr.push(c); else { straddle = true; break; }
-      }
-      // 兩半之間幾乎沒有空白 → 是連續的一行字剛好被切到，整行算「橫跨」
-      if (!straddle && L.length && Rr.length && lo(Rr[0]) - hi(L[L.length - 1]) < 0.6 * ln.s) straddle = true;
-      // 「（　　）」作答空格：左邊是開括號、右邊是關括號，中間的空白不是欄距
-      if (!straddle && L.length && Rr.length && OPEN_PAREN.has(L[L.length - 1].t) && CLOSE_PAREN.has(Rr[0].t)) straddle = true;
-      // 「11. (」這種題號：數字後面接句點，空白只是題號和題目之間的距離
-      if (!straddle && L.length && Rr.length && /^[0-9０-９]$/.test(L[L.length - 1].t)) {
-        const a = hi(L[L.length - 1]), b = lo(Rr[0]);
-        if (ln.chars.some(c => (c.t === '.' || c.t === '．') && lo(c) >= a - 0.1 * ln.s && hi(c) <= b + 0.1 * ln.s && lo(c) - a < 0.5 * ln.s)) straddle = true;
-      }
+      const {L, Rr, straddle} = cut(ln, P);
       if (straddle) { C.push(ln); if (C.length > 3) { bad = true; break; } continue; }
       if (L.length && Rr.length) {
         // 這一行被切成兩半：中間的空白是「乾淨的欄距」，還是剛好有個標點在那裡？
@@ -700,7 +716,53 @@ function splitRegion(chars, dir, depth){
     const score = gap - C.length * 0.5 * s;
     if (!best || score > best.score) best = {score, A, B, C: C.map(l => ({chars: l.chars.slice(), pos: l.pos, s: l.s})), midPos};
   }
-  if (!best) return [chars];
+  if (!best) {
+    // 找不到能整頁切開的欄距，可能是「標題、兩欄、標題、兩欄…」上下疊在一起：
+    // 用最像欄距的那條線，把橫跨它的行當成分隔，切成上下好幾段，每段再各自找欄
+    let bandP = null, bandScore = 0;
+    for (const P of cands) {
+      let nClean = 0, nSplit = 0, nCross = 0;
+      for (const ln of lines) {
+        const {L, Rr, straddle} = cut(ln, P);
+        if (straddle) { nCross++; continue; }
+        if (L.length && Rr.length) { nSplit++; if (lo(Rr[0]) - hi(L[L.length - 1]) >= 1.5 * ln.s) nClean++; }
+      }
+      if (nClean >= 3 && nClean >= 0.6 * nSplit && nCross && nClean - nCross > bandScore) { bandScore = nClean - nCross; bandP = P; }
+    }
+    if (bandP === null) return [chars];
+    // 只有真的伸進右欄的行才算分隔（左欄裡剛好比較長的一行不算）：和上下最近的分欄行比較右欄從哪裡開始
+    const cuts = lines.map(ln => cut(ln, bandP));
+    const rs = cuts.map(r => !r.straddle && r.L.length && r.Rr.length && lo(r.Rr[0]) - hi(r.L[r.L.length - 1]) >= 1.5 * r.L[0].s ? lo(r.Rr[0]) : null);
+    const isSepAt = k => {
+      const r = cuts[k];
+      if (!r.straddle) {
+        // 中間只隔著一個標點（例如「聽句子，再圈出」）→ 是同一行字，不是兩欄
+        if (!r.L.length || !r.Rr.length) return false;
+        const a = hi(r.L[r.L.length - 1]), b = lo(r.Rr[0]);
+        return b - a < 1.5 * lines[k].s && lines[k].chars.some(c => !isCore(c) && lo(c) >= a - 0.1 * lines[k].s && hi(c) <= b + 0.1 * lines[k].s);
+      }
+      let up = null, dn = null;
+      for (let u = k - 1; u >= 0 && up === null; u--) up = rs[u];
+      for (let d = k + 1; d < lines.length && dn === null; d++) dn = rs[d];
+      const local = Math.min(up === null ? Infinity : up, dn === null ? Infinity : dn);
+      if (local === Infinity) return true;
+      // 從跨過切線的那個字往後，連續的一段字寫到哪裡
+      const cc = lines[k].chars.filter(isCore);
+      let e = cc.findIndex(c => hi(c) > bandP);
+      if (e < 0) return true;
+      while (e + 1 < cc.length && lo(cc[e + 1]) - hi(cc[e]) < 1.2 * lines[k].s) e++;
+      return hi(cc[e]) > local - 0.2 * lines[k].s;
+    };
+    const bands = [];
+    let cur = [];
+    for (const [k, ln] of lines.entries()) {
+      if (isSepAt(k)) { if (cur.length) bands.push(cur); bands.push([ln]); cur = []; }
+      else cur.push(ln);
+    }
+    if (cur.length) bands.push(cur);
+    if (bands.length < 2) return [chars];
+    return bands.flatMap(b => b.length === 1 ? [b[0].chars.slice().sort((x, y) => along(x) - along(y))] : splitRegion(b.flatMap(l => l.chars), dir, depth + 1));
+  }
   // 夾在邊欄旁邊的零星字（例如年份數字）併回那一欄
   for (const L of [best.A, best.B]) for (let i = L.length - 1; i >= 0; i--) {
     const h = L[i];
@@ -759,7 +821,11 @@ function rebuildStream(){
   for (let i = 0; i < stream.length; i++) {
     const c = stream[i], n = stream[i + 1];
     let end = !n || ((n.pg !== c.pg || c.br === 2) && !canJoin(i));
-    if (!end && END_SET.has(c.t)) {
+    // 英文句點：前面是英文字母（不是題號「1.」、小數點），而且後面是空白或換行，才算一句結束
+    const engStop = c.t === '.' && i > 0 && /[A-Za-z)]/.test(stream[i - 1].t) && (!n || c.sp || n.lid !== c.lid || /[A-Z(（]/.test(n.t)) && !/^(Mr|Mrs|Ms|Dr|St)$/.test(textOf(Math.max(0, i - 3), i - 1).replace(/.*\s/, ''));
+    // 「at 6:00.」這種數字結尾、而且是一行的最後一個字，也算一句結束（題號「1.」後面同一行還有字，不算）
+    const numStop = c.t === '.' && i > 3 && /\d/.test(stream[i - 1].t) && n && n.lid !== c.lid && stream[i - 3].lid === c.lid && /[A-Za-z]/.test(textOf(Math.max(0, i - 12), i - 1));
+    if (!end && (END_SET.has(c.t) || engStop || numStop)) {
       // 把後面的引號、括號一起算進這句
       let j = i;
       while (stream[j + 1] && CLOSE_SET.has(stream[j + 1].t) && (stream[j + 1].pg === c.pg || canJoin(j)) && (stream[j].br !== 2 || canJoin(j))) j++;
@@ -1099,7 +1165,7 @@ function renderGhBox(){
 }
 function applyPron(t){
   if (!pronRules.length) return t;
-  const rules = pronRules.map(r => [normText(r.from).replace(/\s+/g, ''), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
+  const rules = pronRules.map(r => [compactSpaces(normText(r.from)), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
   let out = '', i = 0;
   outer: while (i < t.length) {
     for (const [f, to] of rules) if (t.startsWith(f, i)) { out += to; i += f.length; continue outer; }
@@ -1145,6 +1211,8 @@ function numbersToZh(t){
     // 題號、選項：保持原樣
     if (!dp && (after === '.' || after === '、' || after === '．') && !/\d/.test(after2)) return m;
     if (/[(（○]/.test(before) || /[)）○]/.test(after)) return m;
+    // 時間「8:20」維持原樣
+    if (!dp && ((after === ':' && /\d/.test(after2)) || (before === ':' && /\d/.test(t[off - 2] || '')))) return m;
     // 分數「1/2」→ 二分之一
     if (after === '/' && /\d/.test(after2)) return m;
     if (before === '/' && /\d/.test(t[off - 2] || '')) return m;
@@ -1158,14 +1226,18 @@ function numbersToZh(t){
 }
 // 全形轉半形等統一寫法，但「①②③」這類圈圈數字保持原樣（不然會變成一般的 1、2、3）
 const KEEP_RE = /([\u2460-\u24FF\u2776-\u2793\u3251-\u325F\u32B1-\u32BF])/u;
+// 國字和國字、國字和數字之間的空白去掉（英文單字之間的空白保留）
+function compactSpaces(t){ return t.replace(/(?<=\p{Script=Han})\s+(?=[\p{Script=Han}\d])|(?<=\d)\s+(?=\p{Script=Han})/gu, ''); }
 function normText(t){ return t.split(KEEP_RE).map((x, i) => i % 2 ? x : x.normalize('NFKC')).join(''); }
 function speakable(t){
   t = normText(t);
   // 國字、數字旁邊的空白去掉（PDF 常在數字前後多一個空格，讀音修正才比對得到）
-  t = t.replace(/\s+(?=[\p{Script=Han}\d])|(?<=[\p{Script=Han}\d])\s+/gu, '');
+  t = compactSpaces(t);
   // 打勾、打叉、畫圈這類記號
   t = t.replace(/(打|畫|劃|請|填)([ˇ√✓✔∨Vv])(?![A-Za-z])/g, '$1勾').replace(/(打|畫|劃)([×╳✗✘ⅩXx])(?![A-Za-z])/g, '$1叉').replace(/(打|畫|劃)([○〇◯Oo])(?![A-Za-z])/g, '$1圈');
-  t = numbersToZh(applyPron(t));
+  t = applyPron(t);
+  // 英文句子（整段沒有國字）裡的數字不轉成國字，讓語音照英文唸
+  if (/\p{Script=Han}/u.test(t)) t = numbersToZh(t);
   return /[\p{L}\p{N}]/u.test(t) ? t : '';
 }
 
