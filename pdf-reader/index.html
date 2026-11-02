@@ -1097,7 +1097,7 @@ function renderGhBox(){
 }
 function applyPron(t){
   if (!pronRules.length) return t;
-  const rules = pronRules.map(r => [r.from.normalize('NFKC'), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
+  const rules = pronRules.map(r => [r.from.normalize('NFKC').replace(/\s+/g, ''), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
   let out = '', i = 0;
   outer: while (i < t.length) {
     for (const [f, to] of rules) if (t.startsWith(f, i)) { out += to; i += f.length; continue outer; }
@@ -1105,8 +1105,60 @@ function applyPron(t){
   }
   return out;
 }
+// ---------- 數字唸法：「每格1分」唸「每格一分」，題號「1.」「(1)」維持原樣 ----------
+const ZH_D = '零一二三四五六七八九';
+function intToZh(str){
+  str = str.replace(/^0+(?=\d)/, '');
+  if (str.length > 12) return str.split('').map(d => ZH_D[+d]).join('');
+  const four = n => {   // 0..9999
+    const u = ['', '十', '百', '千']; let out = '', zero = false;
+    const ds = String(n).padStart(4, '0').split('').map(Number);
+    ds.forEach((d, k) => {
+      const pos = 3 - k;
+      if (d === 0) { if (out) zero = true; return; }
+      if (zero) { out += '零'; zero = false; }
+      out += ZH_D[d] + u[pos];
+    });
+    return out;
+  };
+  const n = Number(str);
+  if (n === 0) return '零';
+  const groups = [n % 1e4, Math.floor(n / 1e4) % 1e4, Math.floor(n / 1e8)];
+  const units = ['', '萬', '億'];
+  let out = '', needZero = false;
+  for (let g = 2; g >= 0; g--) {
+    const v = groups[g];
+    if (!v) { if (out) needZero = true; continue; }
+    if (out && (needZero || v < 1000)) out += '零';
+    out += four(v) + units[g]; needZero = false;
+  }
+  return out.replace(/^一十/, '十');
+}
+const LIANG_UNITS = '個分人隻次本張頁格題位天週條種顆朵杯塊元把件輛台公斤克千萬百';
+function numbersToZh(t){
+  return t.replace(/(\d[\d,]*)(\.\d+)?/g, (m, ip, dp, off) => {
+    const before = t[off - 1] || '', after = t[off + m.length] || '', after2 = t[off + m.length + 1] || '';
+    const intPart = ip.replace(/,(?=\d{3}(\D|$))/g, '');
+    if (!/^\d+$/.test(intPart)) return m;
+    // 題號、選項：保持原樣
+    if (!dp && (after === '.' || after === '、' || after === '．') && !/\d/.test(after2)) return m;
+    if (/[(（○]/.test(before) || /[)）○]/.test(after)) return m;
+    // 分數「1/2」→ 二分之一
+    if (after === '/' && /\d/.test(after2)) return m;
+    if (before === '/' && /\d/.test(t[off - 2] || '')) return m;
+    // 西元年「2026年」唸「二零二六年」
+    if (!dp && /^\d{4}$/.test(intPart) && after === '年' && !/^年級/.test(t.slice(off + m.length))) return intPart.split('').map(d => ZH_D[+d]).join('');
+    let zh = intToZh(intPart);
+    if (zh === '二' && LIANG_UNITS.includes(after) && !/^年級/.test(t.slice(off + m.length))) zh = '兩';
+    if (dp) zh += '點' + dp.slice(1).split('').map(d => ZH_D[+d]).join('');
+    return zh;
+  }).replace(/(\d+)\/(\d+)/g, (m, a, b) => intToZh(b) + '分之' + intToZh(a));
+}
 function speakable(t){
-  t = applyPron(t.normalize('NFKC'));
+  t = t.normalize('NFKC');
+  // 國字、數字旁邊的空白去掉（PDF 常在數字前後多一個空格，讀音修正才比對得到）
+  t = t.replace(/\s+(?=[\p{Script=Han}\d])|(?<=[\p{Script=Han}\d])\s+/gu, '');
+  t = numbersToZh(applyPron(t));
   return /[\p{L}\p{N}]/u.test(t) ? t : '';
 }
 
@@ -1412,7 +1464,7 @@ const mo = new MutationObserver(() => { for (const pg of pages) pg.el.classList.
 mo.observe(pagesEl, {childList: true});
 
 // 測試用
-window.__reader = {splitRegion, orderChars, get stream(){ return stream; }, get sentences(){ return sentences; }, get pages(){ return pages; }, openFile, textOf, S, R, setDir};
+window.__reader = {splitRegion, orderChars, get stream(){ return stream; }, get sentences(){ return sentences; }, get pages(){ return pages; }, openFile, textOf, speakable, S, R, setDir};
 })();
 </script>
 </body>
