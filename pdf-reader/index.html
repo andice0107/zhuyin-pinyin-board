@@ -170,6 +170,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
     唸成 <input type="text" id="pronTo" placeholder="例：常臂猿">
     <button class="btn" id="pronTest">🔊 試聽</button>
     <button class="btn primary" id="pronAdd">＋ 加入</button>
+    <button class="btn" id="pronCancel" style="display:none">取消</button>
   </div>
   <div class="ghbox"><span id="ghState"></span>
     <button class="btn" id="ghLink">🔑 登入我的 GitHub 讀音表</button>
@@ -1318,8 +1319,15 @@ function renderPron(){
     const t = document.createElement('button'); t.className = 'btn'; t.textContent = '🔊'; t.title = '試聽';
     t.onclick = () => sayOnce(r.to);
     const d = document.createElement('button'); d.className = 'btn'; d.textContent = '🗑 刪除';
-    d.onclick = () => { pronRules.splice(k, 1); savePron([{del: r.from}]); };
-    row.append(w, t, d); L.appendChild(row);
+    d.onclick = () => { if (pronEditing === r.from) pronEditDone(); pronRules.splice(k, 1); savePron([{del: r.from}]); };
+    const e = document.createElement('button'); e.className = 'btn'; e.textContent = '✏ 編輯';
+    e.onclick = () => {
+      pronEditing = r.from; $('pronFrom').value = r.from; $('pronTo').value = r.to;
+      $('pronAdd').textContent = '✔ 儲存修改'; $('pronCancel').style.display = '';
+      renderPron(); $('pronTo').focus(); $('pronTo').select();
+    };
+    if (pronEditing === r.from) row.style.background = '#fff6d6';
+    row.append(w, t, e, d); L.appendChild(row);
   });
 }
 function savePron(ops){ store.set('pron', pronRules); renderPron(); if (ops && ops.length) ghPush(ops); }
@@ -1354,17 +1362,26 @@ $('pronBtn').onclick = () => {
   if (sel && sel.b - sel.a < 12) { $('pronFrom').value = textOf(sel.a, sel.b).replace(/\s/g, ''); $('pronTo').value = ''; }
   renderPron(); $('pron').classList.add('show');
 };
-$('pronClose').onclick = () => $('pron').classList.remove('show');
+$('pronClose').onclick = () => { pronEditDone(); $('pron').classList.remove('show'); };
 $('pron').onclick = e => { if (e.target === $('pron')) $('pron').classList.remove('show'); };
 $('pronTest').onclick = () => sayOnce($('pronTo').value.trim() || $('pronFrom').value.trim());
+let pronEditing = null;   // 正在編輯哪一筆（原文）
+function pronEditDone(){
+  pronEditing = null; $('pronFrom').value = ''; $('pronTo').value = '';
+  $('pronAdd').textContent = '＋ 加入'; $('pronCancel').style.display = 'none';
+}
 $('pronAdd').onclick = () => {
   const f = $('pronFrom').value.trim(), t = $('pronTo').value.trim();
   if (!f || !t) { alert('請填寫「原文」和「唸成」。'); return; }
-  pronRules = pronRules.filter(r => r.from !== f);
-  pronRules.push({from: f, to: t});
-  $('pronFrom').value = ''; $('pronTo').value = '';
-  savePron([{add: {from: f, to: t}}]);
+  const ops = [];
+  if (pronEditing !== null && pronEditing !== f) { pronRules = pronRules.filter(r => r.from !== pronEditing); ops.push({del: pronEditing}); }
+  const idx = pronRules.findIndex(r => r.from === f);
+  if (idx >= 0) pronRules[idx] = {from: f, to: t}; else pronRules.push({from: f, to: t});
+  ops.push({add: {from: f, to: t}});
+  pronEditDone();
+  savePron(ops);
 };
+$('pronCancel').onclick = () => { pronEditDone(); renderPron(); };
 $('pronExport').onclick = () => {
   const blob = new Blob([JSON.stringify({type: 'pdf-reader-pron', rules: pronRules}, null, 1)], {type: 'application/json'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '讀音修正表.json';
