@@ -52,6 +52,10 @@ body.collapsed header .opt{display:none}
 .hl{position:absolute;border-radius:2px}
 .hl.sel{background:var(--sel)}
 .hl.cur{background:var(--cur);outline:2px solid var(--cur-border);outline-offset:0;mix-blend-mode:multiply}
+.hl.skip{background:repeating-linear-gradient(45deg,rgba(220,38,38,.30) 0 4px,rgba(220,38,38,.10) 4px 8px);outline:1px dashed #dc2626}
+#markBar{display:none;position:fixed;left:50%;bottom:44px;transform:translateX(-50%);z-index:15;background:#fff7f7;border:2px solid #dc2626;border-radius:14px;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.18);align-items:center;gap:10px;font-size:15px;max-width:calc(100% - 24px)}
+#markBar.show{display:flex}
+.btn.on{background:#fee2e2;border-color:#dc2626;color:#991b1b;font-weight:bold}
 .hl.mark{outline:3px solid var(--mark);background:rgba(22,163,74,.2)}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px}
 #empty .card{background:#fff;border:3px dashed #b8c4d4;border-radius:18px;padding:34px 38px;max-width:640px;text-align:center;line-height:1.8}
@@ -139,6 +143,8 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
     <button class="btn" id="zoomFit">符合寬度</button>
     <button class="btn" id="zoomPage">整頁</button>
     <button class="btn" id="pronBtn">🔤 讀音修正</button>
+    <button class="btn" id="skipMode" title="把不想讓學生聽到的字（例如會透露答案的數字、要寫注音的國字）標記起來，朗讀時自動跳過">🙈 標記不唸</button>
+    <button class="btn" id="skipClear" style="display:none">清除這份的不唸標記</button>
     <button class="btn" id="helpBtn">❓ 說明</button>
   </div>
 </header>
@@ -159,9 +165,10 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/02-F）</span>
+  <span id="status">尚未開啟檔案（版本 11/02-G）</span>
   <span id="nowText"></span>
 </footer>
+<div id="markBar"><span>🙈 <b>標記不唸</b>：拖曳選字（iPad 按住再拖）就標記，再選一次取消</span><button class="btn primary" id="markDone">✔ 完成</button></div>
 <div id="pron"><div class="card">
   <h2>🔤 讀音修正（破音字）</h2>
   <div class="hint">語音把字唸錯時，在這裡告訴它要怎麼唸。「唸成」請用<b>同音、而且不會唸錯的字</b>代替，例如「長臂猿」→「常臂猿」、「音樂」→「音月」。建議輸入整個詞，比較不會影響到別的地方。先在頁面上選好文字再打開這裡，會自動帶入。</div>
@@ -369,6 +376,8 @@ async function openFile(file){
     try { await extractPage(pg); } catch(e){ console.warn(e); pg.chars = []; }
     if (tok !== docToken) return;
   }
+  docKey = 'skip:' + ((pdf.fingerprints && pdf.fingerprints[0]) || (file.name + ':' + file.size));
+  for (const [pn, idx] of store.get(docKey, [])) { const c = pages[pn - 1] && pages[pn - 1].chars[idx]; if (c) c.skip = true; }
   rebuildStream();
   detectDirection();
   const noText = pages.filter(p => !p.chars.length).length;
@@ -380,10 +389,10 @@ function makePage(num, pdfPage, vp){
   const el = document.createElement('div');
   el.className = 'page';
   el.dataset.num = num;
-  el.innerHTML = '<div class="loading">第 ' + num + ' 頁載入中…</div><canvas></canvas><div class="layer sel-layer"></div><div class="layer cur-layer"></div><div class="hit"></div><div class="pno">' + num + ' / ' + pdf.numPages + '</div>';
+  el.innerHTML = '<div class="loading">第 ' + num + ' 頁載入中…</div><canvas></canvas><div class="layer skip-layer"></div><div class="layer sel-layer"></div><div class="layer cur-layer"></div><div class="hit"></div><div class="pno">' + num + ' / ' + pdf.numPages + '</div>';
   pagesEl.appendChild(el);
   const pg = { num, pdfPage, w: vp.width, h: vp.height, el, canvas: el.querySelector('canvas'),
-    selLayer: el.querySelector('.sel-layer'), curLayer: el.querySelector('.cur-layer'),
+    selLayer: el.querySelector('.sel-layer'), skipLayer: el.querySelector('.skip-layer'), curLayer: el.querySelector('.cur-layer'),
     chars: [], renderedScale: 0, renderTask: null, visible: false };
   io.observe(el);
   bindPointer(pg, el.querySelector('.hit'));
@@ -856,6 +865,7 @@ function rebuildStream(){
   }
   sentences.forEach((s, k) => { for (let i = s.a; i <= s.b; i++) stream[i].sid = k; });
   clearSelection();
+  drawSkips();
 }
 
 function detectDirection(){
@@ -923,6 +933,49 @@ function setSelection(a, b){
 }
 function clearSelection(){ sel = null; twoTapStart = null; drawHL('sel', null); }
 
+// ---------- 標記不唸 ----------
+// 老師把會透露答案的字（例如比大小的數字、要寫注音的國字）標起來，朗讀時跳過；每份檔案分開記在這台設備
+let markMode = false, docKey = null;
+function drawSkips(){
+  for (const pg of pages) if (pg.skipLayer) pg.skipLayer.innerHTML = '';
+  let i = 0;
+  while (i < stream.length) {
+    if (!stream[i].skip) { i++; continue; }
+    let j = i; while (j + 1 < stream.length && stream[j + 1].skip) j++;
+    for (const r of rectsFor(i, j)) {
+      const d = document.createElement('div');
+      d.className = 'hl skip';
+      d.style.left = (r.x0 / r.pg.w * 100) + '%'; d.style.top = (r.y0 / r.pg.h * 100) + '%';
+      d.style.width = ((r.x1 - r.x0) / r.pg.w * 100) + '%'; d.style.height = ((r.y1 - r.y0) / r.pg.h * 100) + '%';
+      r.pg.skipLayer.appendChild(d);
+    }
+    i = j + 1;
+  }
+}
+function saveSkips(){
+  if (!docKey) return;
+  const list = [];
+  for (const pg of pages) pg.chars.forEach((c, k) => { if (c.skip) list.push([pg.num, k]); });
+  store.set(docKey, list);
+}
+function toggleSkip(a, b){
+  if (a > b) [a, b] = [b, a];
+  const cs = stream.slice(a, b + 1);
+  const on = !cs.every(c => c.skip);
+  for (const c of cs) c.skip = on;
+  saveSkips(); drawSkips();
+  setStatus(on ? '已標記不唸（' + cs.length + ' 個字）' : '已取消不唸標記');
+}
+function setMarkMode(on){
+  markMode = on;
+  $('skipMode').classList.toggle('on', on);
+  $('skipMode').textContent = on ? '✔ 標記完成' : '🙈 標記不唸';
+  $('skipClear').style.display = on ? '' : 'none';
+  $('markBar').classList.toggle('show', on);
+  if (on) { stopReading(true); clearSelection(); setStatus('標記不唸：拖曳選範圍（iPad 按住再拖）就會標記，再選一次可取消；點一下標記一個字。'); }
+  else setStatus('');
+}
+
 // ---------- 滑鼠／觸控 ----------
 function pagePoint(pg, e){
   const r = pg.el.getBoundingClientRect();
@@ -955,14 +1008,14 @@ function bindPointer(pg, hit){
     if (drag && drag.timer) clearTimeout(drag.timer);
     drag = {pg, c, x: e.clientX, y: e.clientY, moved: false, type: e.pointerType, shift: e.shiftKey, id: e.pointerId, holding: false};
     if (e.pointerType === 'mouse') { e.preventDefault(); try { hit.setPointerCapture(e.pointerId); } catch(_){} }
-    else if (S.mode === 'mix' || S.mode === 'drag') {
+    else if (markMode || S.mode === 'mix' || S.mode === 'drag') {
       // 觸控：按住約半秒不動 → 開始反白；直接滑動 → 捲動頁面
       const d = drag;
       d.timer = setTimeout(() => {
         if (drag !== d || d.moved) return;
         d.holding = true;
         if (!d.c) d.c = charAtClient({clientX: d.x, clientY: d.y}, true);
-        if (d.c) { drawHL('sel', d.c.g, d.c.g, 'mark'); setStatus('拖曳手指選範圍，放開就朗讀'); }
+        if (d.c) { drawHL('sel', d.c.g, d.c.g, 'mark'); setStatus(markMode ? '拖曳手指選範圍，放開就標記不唸' : '拖曳手指選範圍，放開就朗讀'); }
         if (navigator.vibrate) try { navigator.vibrate(20); } catch(_){}
       }, 380);
     }
@@ -975,7 +1028,7 @@ function bindPointer(pg, hit){
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 10) { clearTimeout(drag.timer); drag.scrolling = true; }
       return;
     }
-    const canDrag = drag.type === 'mouse' ? (S.mode === 'drag' || S.mode === 'mix') : drag.holding;
+    const canDrag = drag.type === 'mouse' ? (markMode || S.mode === 'drag' || S.mode === 'mix') : drag.holding;
     if (!canDrag) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
     if (!drag.moved) {
@@ -993,6 +1046,12 @@ function bindPointer(pg, hit){
     clearTimeout(d.timer);
     if (d.holding) setStatus('');
     if (e.type === 'pointercancel' || d.scrolling) { if (d.holding && !d.moved) drawHL('sel', sel ? sel.a : null, sel ? sel.b : null); return; }
+    if (markMode) {
+      if (d.moved && d.c && d.f && sel) toggleSkip(sel.a, sel.b);
+      else if (!d.moved && d.c) toggleSkip(d.c.g, d.c.g);
+      clearSelection();
+      return;
+    }
     if (d.moved) {
       if (d.c && d.f && S.autoRead) { stopReading(true); readRange(sel.a, sel.b); }
       return;
@@ -1077,6 +1136,16 @@ function currentVoice(){ return voices.find(v => v.voiceURI === $('voiceSel').va
 // 播放佇列
 const R = {queue: [], idx: 0, playing: false, paused: false, token: 0, cont: false, startedAt: 0, gotStart: false};
 
+function spokenOf(a, b){
+  let s = '';
+  for (let i = a; i <= b; i++) {
+    const c = stream[i];
+    if (c.skip) { if (!s.endsWith(' ')) s += ' '; continue; }
+    s += c.t;
+    if (i < b && c.sp) s += ' ';
+  }
+  return s;
+}
 function textOf(a, b){
   let s = '';
   for (let i = a; i <= b; i++) {
@@ -1287,7 +1356,7 @@ function speakCurrent(){
     }
   }
   if (!seg) { finishReading(); return; }
-  const text = speakable(textOf(seg.a, seg.b));
+  const text = speakable(spokenOf(seg.a, seg.b));
   const first = drawHL('cur', seg.a, seg.b);
   if (first) ensureVisible(first);
   $('nowText').textContent = '🔊 ' + (text || textOf(seg.a, seg.b));
@@ -1509,6 +1578,13 @@ $('ghUnlink').onclick = () => {
   gh.repo = gh.token = gh.state = ''; store.set('ghRepo', ''); store.set('ghToken', ''); store.set('ghPending', []);
   pronRules = []; store.set('pron', []); renderPron();
 };
+$('skipMode').onclick = () => setMarkMode(!markMode);
+$('markDone').onclick = () => setMarkMode(false);
+$('skipClear').onclick = () => {
+  if (!confirm('要清除這份檔案所有的「不唸」標記嗎？')) return;
+  for (const pg of pages) for (const c of pg.chars) c.skip = false;
+  saveSkips(); drawSkips();
+};
 $('pronBtn').onclick = () => {
   if (ghLinked()) ghPull();
   if (sel && sel.b - sel.a < 12) { $('pronFrom').value = textOf(sel.a, sel.b).replace(/\s/g, ''); $('pronTo').value = ''; }
@@ -1564,7 +1640,7 @@ const mo = new MutationObserver(() => { for (const pg of pages) pg.el.classList.
 mo.observe(pagesEl, {childList: true});
 
 // 測試用
-window.__reader = {splitRegion, orderChars, get stream(){ return stream; }, get sentences(){ return sentences; }, get pages(){ return pages; }, openFile, textOf, speakable, S, R, setDir};
+window.__reader = {splitRegion, orderChars, get stream(){ return stream; }, get sentences(){ return sentences; }, get pages(){ return pages; }, openFile, textOf, spokenOf, speakable, toggleSkip, setMarkMode, S, R, setDir};
 })();
 </script>
 </body>
