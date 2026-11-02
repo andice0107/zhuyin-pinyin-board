@@ -159,7 +159,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/02-B）</span>
+  <span id="status">尚未開啟檔案（版本 11/02-C）</span>
   <span id="nowText"></span>
 </footer>
 <div id="pron"><div class="card">
@@ -1097,7 +1097,7 @@ function renderGhBox(){
 }
 function applyPron(t){
   if (!pronRules.length) return t;
-  const rules = pronRules.map(r => [r.from.normalize('NFKC').replace(/\s+/g, ''), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
+  const rules = pronRules.map(r => [normText(r.from).replace(/\s+/g, ''), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
   let out = '', i = 0;
   outer: while (i < t.length) {
     for (const [f, to] of rules) if (t.startsWith(f, i)) { out += to; i += f.length; continue outer; }
@@ -1154,8 +1154,11 @@ function numbersToZh(t){
     return zh;
   }).replace(/(\d+)\/(\d+)/g, (m, a, b) => intToZh(b) + '分之' + intToZh(a));
 }
+// 全形轉半形等統一寫法，但「①②③」這類圈圈數字保持原樣（不然會變成一般的 1、2、3）
+const KEEP_RE = /([\u2460-\u24FF\u2776-\u2793\u3251-\u325F\u32B1-\u32BF])/u;
+function normText(t){ return t.split(KEEP_RE).map((x, i) => i % 2 ? x : x.normalize('NFKC')).join(''); }
 function speakable(t){
-  t = t.normalize('NFKC');
+  t = normText(t);
   // 國字、數字旁邊的空白去掉（PDF 常在數字前後多一個空格，讀音修正才比對得到）
   t = t.replace(/\s+(?=[\p{Script=Han}\d])|(?<=[\p{Script=Han}\d])\s+/gu, '');
   t = numbersToZh(applyPron(t));
