@@ -159,7 +159,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案</span>
+  <span id="status">尚未開啟檔案（版本 11/02-B）</span>
   <span id="nowText"></span>
 </footer>
 <div id="pron"><div class="card">
@@ -1190,7 +1190,7 @@ function speakCurrent(){
   const text = speakable(textOf(seg.a, seg.b));
   const first = drawHL('cur', seg.a, seg.b);
   if (first) ensureVisible(first);
-  $('nowText').textContent = '🔊 ' + textOf(seg.a, seg.b);
+  $('nowText').textContent = '🔊 ' + (text || textOf(seg.a, seg.b));
   if (!text) { R.idx++; speakCurrent(); return; }
   const u = new SpeechSynthesisUtterance(text);
   const v = currentVoice();
