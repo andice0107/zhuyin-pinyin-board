@@ -75,6 +75,9 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 14px
 #pronList .row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #edf0f4;font-size:18px}
 #pronList .row:last-child{border-bottom:0}
 #pronList .row .w{flex:1}
+#pronList .row.cloud .w::before{content:'☁ ';}
+#pronList .row.cloud{background:#f4f8ff}
+#pron .cloudbar{font-size:15px;line-height:1.6;background:#f4f8ff;border-radius:10px;padding:8px 10px}
 #pronList .empty{padding:16px;color:var(--muted);font-size:14px}
 #pron .foot{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 #help .card{background:#fff;border-radius:14px;max-width:620px;max-height:90vh;overflow:auto;padding:22px 26px;line-height:1.75}
@@ -169,6 +172,8 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
     <button class="btn" id="pronTest">🔊 試聽</button>
     <button class="btn primary" id="pronAdd">＋ 加入</button>
   </div>
+  <div class="cloudbar"><label><input type="checkbox" id="useCloud"> 同時套用網站上的「共用讀音表」</label> <span id="cloudInfo"></span><br>
+  <span class="hint">☁ 開頭的是網站上的共用讀音表，只有網站管理者能更改；你在這裡加的修正只存在這台設備，會蓋過共用表的同一個詞。</span></div>
   <div id="pronList"></div>
   <div class="foot">
     <button class="btn" id="pronExport">⬇ 匯出修正表</button>
@@ -621,6 +626,7 @@ function clusterLines(chars, dir){
 // 同一行如果在切線兩邊各有字、中間又空了一段，就拆成兩半分別歸到兩區（這正是多欄排版）。
 // 少數真的橫跨切線、而且排在最前或最後的行（例如標題、試卷邊的班級座號欄）另外先讀或最後讀。
 // 句尾標點常「懸掛」到欄間空白裡，找切線時不把它們算進去。
+const OPEN_PAREN = new Set(['(','（','[','［','〔','︵','﹙']), CLOSE_PAREN = new Set([')','）',']','］','〕','︶','﹚']);
 function splitRegion(chars, dir, depth){
   if (depth > 14 || chars.length < 6) return [chars];
   const {pos, along, lo, hi} = axisFns(dir);
@@ -647,6 +653,13 @@ function splitRegion(chars, dir, depth){
       }
       // 兩半之間幾乎沒有空白 → 是連續的一行字剛好被切到，整行算「橫跨」
       if (!straddle && L.length && Rr.length && lo(Rr[0]) - hi(L[L.length - 1]) < 0.6 * ln.s) straddle = true;
+      // 「（　　）」作答空格：左邊是開括號、右邊是關括號，中間的空白不是欄距
+      if (!straddle && L.length && Rr.length && OPEN_PAREN.has(L[L.length - 1].t) && CLOSE_PAREN.has(Rr[0].t)) straddle = true;
+      // 「11. (」這種題號：數字後面接句點，空白只是題號和題目之間的距離
+      if (!straddle && L.length && Rr.length && /^[0-9０-９]$/.test(L[L.length - 1].t)) {
+        const a = hi(L[L.length - 1]), b = lo(Rr[0]);
+        if (ln.chars.some(c => (c.t === '.' || c.t === '．') && lo(c) >= a - 0.1 * ln.s && hi(c) <= b + 0.1 * ln.s && lo(c) - a < 0.5 * ln.s)) straddle = true;
+      }
       if (straddle) { C.push(ln); if (C.length > 3) { bad = true; break; } continue; }
       if (L.length && Rr.length) {
         // 這一行被切成兩半：中間的空白是「乾淨的欄距」，還是剛好有個標點在那裡？
@@ -1008,9 +1021,29 @@ function segmentsFor(a, b){
 }
 // 讀音修正表：[{from, to}]，長的詞先替換
 let pronRules = store.get('pron', []);
+// 網站上的共用讀音表（放在網站同一個資料夾的「讀音修正表.json」，只有網站管理者能在 GitHub 上更改）
+const CLOUD_PRON_FILE = '讀音修正表.json';
+const CLOUD_PRON_URL = location.protocol === 'file:' ? 'https://andice0107.github.io/zhuyin-pinyin-board/pdf-reader/' + encodeURIComponent(CLOUD_PRON_FILE) : encodeURIComponent(CLOUD_PRON_FILE);
+let cloudRules = store.get('pronCloud', []), cloudState = cloudRules.length ? 'cached' : 'none';
+let useCloud = store.get('useCloud', true);
+function parsePronFile(j){ return (Array.isArray(j) ? j : (j && j.rules) || []).filter(r => r && r.from && r.to).map(r => ({from: String(r.from).trim(), to: String(r.to).trim()})); }
+async function loadCloudPron(){
+  try {
+    const r = await fetch(CLOUD_PRON_URL, {cache: 'no-cache'});
+    if (r.status === 404) { cloudRules = []; cloudState = 'ok'; store.set('pronCloud', []); }
+    else if (r.ok) { cloudRules = parsePronFile(await r.json()); cloudState = 'ok'; store.set('pronCloud', cloudRules); }
+  } catch(e) {}
+  if ($('pron').classList.contains('show')) renderPron();
+}
+// 實際使用的規則：共用表 + 本機（同一個詞以本機為準）
+function allPronRules(){
+  const local = new Set(pronRules.map(r => r.from));
+  return (useCloud ? cloudRules.filter(r => !local.has(r.from)) : []).concat(pronRules);
+}
 function applyPron(t){
-  if (!pronRules.length) return t;
-  const rules = pronRules.map(r => [r.from.normalize('NFKC'), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
+  const all = allPronRules();
+  if (!all.length) return t;
+  const rules = all.map(r => [r.from.normalize('NFKC'), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
   let out = '', i = 0;
   outer: while (i < t.length) {
     for (const [f, to] of rules) if (t.startsWith(f, i)) { out += to; i += f.length; continue outer; }
@@ -1224,7 +1257,18 @@ headerEl.addEventListener('change', () => armAutoCollapse());
 function renderPron(){
   const L = $('pronList');
   L.innerHTML = '';
-  if (!pronRules.length) { L.innerHTML = '<div class="empty">還沒有修正。</div>'; return; }
+  $('useCloud').checked = useCloud;
+  $('cloudInfo').textContent = cloudState === 'ok' ? '（共 ' + cloudRules.length + ' 筆）' : cloudState === 'cached' ? '（離線，使用上次下載的 ' + cloudRules.length + ' 筆）' : '（目前連不到網站）';
+  const local = new Set(pronRules.map(r => r.from));
+  const shownCloud = useCloud ? cloudRules.filter(r => !local.has(r.from)) : [];
+  if (!pronRules.length && !shownCloud.length) { L.innerHTML = '<div class="empty">還沒有修正。</div>'; return; }
+  shownCloud.forEach(r => {
+    const row = document.createElement('div'); row.className = 'row cloud';
+    const w = document.createElement('span'); w.className = 'w'; w.textContent = r.from + '　→　' + r.to;
+    const t = document.createElement('button'); t.className = 'btn'; t.textContent = '🔊'; t.title = '試聽';
+    t.onclick = () => sayOnce(r.to);
+    row.append(w, t); L.appendChild(row);
+  });
   pronRules.forEach((r, k) => {
     const row = document.createElement('div'); row.className = 'row';
     const w = document.createElement('span'); w.className = 'w'; w.textContent = r.from + '　→　' + r.to;
@@ -1258,8 +1302,10 @@ $('pronAdd').onclick = () => {
   $('pronFrom').value = ''; $('pronTo').value = '';
   savePron();
 };
+$('useCloud').onchange = e => { useCloud = e.target.checked; store.set('useCloud', useCloud); renderPron(); };
 $('pronExport').onclick = () => {
-  const blob = new Blob([JSON.stringify({type: 'pdf-reader-pron', rules: pronRules}, null, 1)], {type: 'application/json'});
+  // 匯出的是「目前實際使用的整張表」（共用表＋本機修正），可直接拿去更新網站上的共用讀音表
+  const blob = new Blob([JSON.stringify({type: 'pdf-reader-pron', rules: allPronRules().slice().sort((a, b) => a.from.localeCompare(b.from, 'zh-Hant'))}, null, 1)], {type: 'application/json'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '讀音修正表.json';
   document.body.appendChild(a); a.click(); a.remove();
 };
@@ -1267,13 +1313,14 @@ $('pronImport').onclick = () => $('pronFile').click();
 $('pronFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
   try {
-    const j = JSON.parse(await f.text());
-    const rules = (Array.isArray(j) ? j : j.rules || []).filter(r => r && r.from && r.to);
+    const rules = parsePronFile(JSON.parse(await f.text()));
     let n = 0;
-    for (const r of rules) { pronRules = pronRules.filter(x => x.from !== r.from); pronRules.push({from: String(r.from), to: String(r.to)}); n++; }
+    for (const r of rules) { pronRules = pronRules.filter(x => x.from !== r.from); pronRules.push(r); n++; }
     savePron(); alert('已匯入 ' + n + ' 筆讀音修正。');
   } catch(err){ alert('這個檔案不是讀音修正表。'); }
 };
+
+loadCloudPron();
 
 $('helpBtn').onclick = () => $('help').classList.add('show');
 $('helpClose').onclick = () => $('help').classList.remove('show');
