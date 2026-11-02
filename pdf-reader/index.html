@@ -159,7 +159,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/02-C）</span>
+  <span id="status">尚未開啟檔案（版本 11/02-D）</span>
   <span id="nowText"></span>
 </footer>
 <div id="pron"><div class="card">
@@ -487,6 +487,8 @@ async function extractPage(pg){
   }
   pg.chars = await markHiddenChars(pg, chars);
   markBoxChars(pg.chars);
+  // 單獨的「ˇ」（旁邊沒有注音符號）其實是打勾的記號，不是聲調
+  for (const c of pg.chars) if (c.t === 'ˇ' && c.zy && !pg.chars.some(o => o !== c && /[\u3105-\u312F\u31A0-\u31BF]/.test(o.t) && Math.hypot(o.cx - c.cx, o.cy - c.cy) < 1.5 * Math.max(o.s, c.s))) { c.zy = false; c.mark = true; }
   pg.vertFont = Object.values(tc.styles).some(st => st.vertical);
   if (!chars.length) {
     const b = document.createElement('div'); b.className = 'notext';
@@ -1161,6 +1163,8 @@ function speakable(t){
   t = normText(t);
   // 國字、數字旁邊的空白去掉（PDF 常在數字前後多一個空格，讀音修正才比對得到）
   t = t.replace(/\s+(?=[\p{Script=Han}\d])|(?<=[\p{Script=Han}\d])\s+/gu, '');
+  // 打勾、打叉、畫圈這類記號
+  t = t.replace(/(打|畫|劃|請|填)([ˇ√✓✔∨Vv])(?![A-Za-z])/g, '$1勾').replace(/(打|畫|劃)([×╳✗✘ⅩXx])(?![A-Za-z])/g, '$1叉').replace(/(打|畫|劃)([○〇◯Oo])(?![A-Za-z])/g, '$1圈');
   t = numbersToZh(applyPron(t));
   return /[\p{L}\p{N}]/u.test(t) ? t : '';
 }
