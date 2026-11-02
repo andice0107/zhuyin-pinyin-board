@@ -75,6 +75,8 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 14px
 #pronList .row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #edf0f4;font-size:18px}
 #pronList .row:last-child{border-bottom:0}
 #pronList .row .w{flex:1}
+#pron .ghbox{font-size:15px;line-height:1.6;background:#f4f8ff;border-radius:10px;padding:8px 10px;display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+#ghState{flex:1 1 100%}
 #pronList .empty{padding:16px;color:var(--muted);font-size:14px}
 #pron .foot{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 #help .card{background:#fff;border-radius:14px;max-width:620px;max-height:90vh;overflow:auto;padding:22px 26px;line-height:1.75}
@@ -169,6 +171,10 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
     <button class="btn" id="pronTest">🔊 試聽</button>
     <button class="btn primary" id="pronAdd">＋ 加入</button>
   </div>
+  <div class="ghbox"><span id="ghState"></span>
+    <button class="btn" id="ghLink">🔑 登入我的 GitHub 讀音表</button>
+    <button class="btn" id="ghSync">🔄 立即同步</button>
+    <button class="btn" id="ghUnlink">登出，並清除這台設備的讀音表</button></div>
   <div id="pronList"></div>
   <div class="foot">
     <button class="btn" id="pronExport">⬇ 匯出修正表</button>
@@ -621,6 +627,7 @@ function clusterLines(chars, dir){
 // 同一行如果在切線兩邊各有字、中間又空了一段，就拆成兩半分別歸到兩區（這正是多欄排版）。
 // 少數真的橫跨切線、而且排在最前或最後的行（例如標題、試卷邊的班級座號欄）另外先讀或最後讀。
 // 句尾標點常「懸掛」到欄間空白裡，找切線時不把它們算進去。
+const OPEN_PAREN = new Set(['(','（','[','［','〔','︵','﹙']), CLOSE_PAREN = new Set([')','）',']','］','〕','︶','﹚']);
 function splitRegion(chars, dir, depth){
   if (depth > 14 || chars.length < 6) return [chars];
   const {pos, along, lo, hi} = axisFns(dir);
@@ -647,6 +654,13 @@ function splitRegion(chars, dir, depth){
       }
       // 兩半之間幾乎沒有空白 → 是連續的一行字剛好被切到，整行算「橫跨」
       if (!straddle && L.length && Rr.length && lo(Rr[0]) - hi(L[L.length - 1]) < 0.6 * ln.s) straddle = true;
+      // 「（　　）」作答空格：左邊是開括號、右邊是關括號，中間的空白不是欄距
+      if (!straddle && L.length && Rr.length && OPEN_PAREN.has(L[L.length - 1].t) && CLOSE_PAREN.has(Rr[0].t)) straddle = true;
+      // 「11. (」這種題號：數字後面接句點，空白只是題號和題目之間的距離
+      if (!straddle && L.length && Rr.length && /^[0-9０-９]$/.test(L[L.length - 1].t)) {
+        const a = hi(L[L.length - 1]), b = lo(Rr[0]);
+        if (ln.chars.some(c => (c.t === '.' || c.t === '．') && lo(c) >= a - 0.1 * ln.s && hi(c) <= b + 0.1 * ln.s && lo(c) - a < 0.5 * ln.s)) straddle = true;
+      }
       if (straddle) { C.push(ln); if (C.length > 3) { bad = true; break; } continue; }
       if (L.length && Rr.length) {
         // 這一行被切成兩半：中間的空白是「乾淨的欄距」，還是剛好有個標點在那裡？
@@ -1008,6 +1022,73 @@ function segmentsFor(a, b){
 }
 // 讀音修正表：[{from, to}]，長的詞先替換
 let pronRules = store.get('pron', []);
+// ---------- 用自己的 GitHub 私人儲存庫同步讀音修正表（要有自己的金鑰才讀得到、改得到） ----------
+const GH_FILE = '讀音修正表.json';
+let gh = {repo: store.get('ghRepo', ''), token: store.get('ghToken', ''), state: '', busy: false};
+const ghLinked = () => !!(gh.repo && gh.token);
+function parsePronFile(j){ return (Array.isArray(j) ? j : (j && j.rules) || []).filter(r => r && r.from && r.to).map(r => ({from: String(r.from).trim(), to: String(r.to).trim()})); }
+function b64ToText(b){ const bin = atob(b.replace(/\s/g, '')); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new TextDecoder().decode(u); }
+function textToB64(t){ const u = new TextEncoder().encode(t); let bin = ''; for (let i = 0; i < u.length; i += 8192) bin += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return btoa(bin); }
+async function ghApi(path, opt = {}){
+  const r = await fetch('https://api.github.com/repos/' + gh.repo + path, Object.assign({cache: 'no-store'}, opt, {headers: Object.assign({'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + gh.token}, opt.headers || {})}));
+  return r;
+}
+async function ghGet(){
+  const r = await ghApi('/contents/' + encodeURIComponent(GH_FILE));
+  if (r.status === 404) {
+    const rr = await ghApi('');
+    if (!rr.ok) throw new Error('noaccess');
+    return {rules: [], sha: null};
+  }
+  if (r.status === 401 || r.status === 403) throw new Error('noaccess');
+  if (!r.ok) throw new Error('http' + r.status);
+  const j = await r.json();
+  return {rules: parsePronFile(JSON.parse(b64ToText(j.content) || '[]')), sha: j.sha};
+}
+function applyOps(rules, ops){
+  rules = rules.slice();
+  for (const op of ops) {
+    if (op.del) rules = rules.filter(r => r.from !== op.del);
+    if (op.add) { rules = rules.filter(r => r.from !== op.add.from); rules.push(op.add); }
+  }
+  return rules;
+}
+function ghSay(msg){ gh.state = msg; const e = $('ghState'); if (e) renderGhBox(); }
+function ghErr(e){ return e.message === 'noaccess' ? '❌ 連不進你的讀音表：儲存庫名稱或金鑰不對，或金鑰已過期。' : '⚠ 目前連不到 GitHub（先用這台設備上的表，連上網路後按「立即同步」）。'; }
+// 下載：把雲端的表抓下來，蓋過這台設備的表
+async function ghPull(){
+  if (!ghLinked() || gh.busy) return;
+  gh.busy = true; ghSay('🔄 同步中…');
+  try { const {rules} = await ghGet(); pronRules = rules; store.set('pron', pronRules); ghSay('✅ 已登入 ' + gh.repo + '，和雲端同步（共 ' + rules.length + ' 筆）'); }
+  catch(e){ ghSay(ghErr(e)); }
+  gh.busy = false; renderPron();
+}
+// 上傳：先抓最新的雲端表，再把這次的修改套上去，避免蓋掉其他設備剛存的修正
+async function ghPush(ops){
+  if (!ghLinked()) return;
+  gh.busy = true; ghSay('🔄 儲存到雲端中…');
+  for (let tries = 0; tries < 3; tries++) {
+    try {
+      const {rules, sha} = await ghGet();
+      const next = applyOps(rules, ops).sort((a, b) => a.from.localeCompare(b.from, 'zh-Hant'));
+      const body = {message: '更新讀音修正表', content: textToB64(JSON.stringify({type: 'pdf-reader-pron', rules: next}, null, 1) + '\n')};
+      if (sha) body.sha = sha;
+      const r = await ghApi('/contents/' + encodeURIComponent(GH_FILE), {method: 'PUT', body: JSON.stringify(body)});
+      if (r.status === 409 || r.status === 422) continue;
+      if (r.status === 401 || r.status === 403 || r.status === 404) throw new Error('noaccess');
+      if (!r.ok) throw new Error('http' + r.status);
+      pronRules = next; store.set('pron', pronRules);
+      ghSay('✅ 已存到雲端（共 ' + next.length + ' 筆）');
+      gh.busy = false; renderPron(); return;
+    } catch(e){ ghSay(ghErr(e) + ' 這次的修改先存在這台設備。'); break; }
+  }
+  gh.busy = false; renderPron();
+}
+function renderGhBox(){
+  $('ghState').textContent = ghLinked() ? (gh.state || '✅ 已登入 ' + gh.repo) : '目前讀音表只存在這台設備。登入自己的 GitHub 讀音表後，你所有的設備會共用同一份表，別人看不到也改不到。';
+  $('ghLink').style.display = ghLinked() ? 'none' : '';
+  $('ghSync').style.display = $('ghUnlink').style.display = ghLinked() ? '' : 'none';
+}
 function applyPron(t){
   if (!pronRules.length) return t;
   const rules = pronRules.map(r => [r.from.normalize('NFKC'), r.to]).filter(r => r[0]).sort((a, b) => b[0].length - a[0].length);
@@ -1224,6 +1305,7 @@ headerEl.addEventListener('change', () => armAutoCollapse());
 function renderPron(){
   const L = $('pronList');
   L.innerHTML = '';
+  renderGhBox();
   if (!pronRules.length) { L.innerHTML = '<div class="empty">還沒有修正。</div>'; return; }
   pronRules.forEach((r, k) => {
     const row = document.createElement('div'); row.className = 'row';
@@ -1231,11 +1313,11 @@ function renderPron(){
     const t = document.createElement('button'); t.className = 'btn'; t.textContent = '🔊'; t.title = '試聽';
     t.onclick = () => sayOnce(r.to);
     const d = document.createElement('button'); d.className = 'btn'; d.textContent = '🗑 刪除';
-    d.onclick = () => { pronRules.splice(k, 1); savePron(); };
+    d.onclick = () => { pronRules.splice(k, 1); savePron([{del: r.from}]); };
     row.append(w, t, d); L.appendChild(row);
   });
 }
-function savePron(){ store.set('pron', pronRules); renderPron(); }
+function savePron(ops){ store.set('pron', pronRules); renderPron(); if (ops && ops.length) ghPush(ops); }
 function sayOnce(text){
   if (!synth || !text) return;
   stopReading(true); synth.cancel();
@@ -1243,7 +1325,26 @@ function sayOnce(text){
   const v = currentVoice(); if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'zh-TW';
   u.rate = S.rate; window.__utt = u; synth.speak(u);
 }
+$('ghLink').onclick = async () => {
+  const repo = (prompt('請輸入你的私人讀音表儲存庫（帳號/儲存庫名稱），例如：andice0107/my-pron-rules', gh.repo || '') || '').trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '');
+  if (!repo) return;
+  const token = (prompt('請貼上這個儲存庫的金鑰（github_pat_ 開頭的那一長串）') || '').trim();
+  if (!token) return;
+  gh.repo = repo; gh.token = token;
+  try { await ghGet(); }
+  catch(e){ gh.repo = ''; gh.token = ''; alert(e.message === 'noaccess' ? '登入失敗：儲存庫名稱或金鑰不對。' : '現在連不到 GitHub，請確認網路後再試一次。'); renderPron(); return; }
+  store.set('ghRepo', repo); store.set('ghToken', token);
+  // 這台設備原本就有的修正，一起併到雲端的表
+  if (pronRules.length) await ghPush(pronRules.map(r => ({add: r}))); else await ghPull();
+};
+$('ghSync').onclick = () => ghPull();
+$('ghUnlink').onclick = () => {
+  if (!confirm('要登出嗎？這台設備上的讀音表和金鑰都會清除（雲端上的表不受影響，下次登入就會回來）。')) return;
+  gh.repo = gh.token = gh.state = ''; store.set('ghRepo', ''); store.set('ghToken', '');
+  pronRules = []; store.set('pron', []); renderPron();
+};
 $('pronBtn').onclick = () => {
+  if (ghLinked()) ghPull();
   if (sel && sel.b - sel.a < 12) { $('pronFrom').value = textOf(sel.a, sel.b).replace(/\s/g, ''); $('pronTo').value = ''; }
   renderPron(); $('pron').classList.add('show');
 };
@@ -1256,7 +1357,7 @@ $('pronAdd').onclick = () => {
   pronRules = pronRules.filter(r => r.from !== f);
   pronRules.push({from: f, to: t});
   $('pronFrom').value = ''; $('pronTo').value = '';
-  savePron();
+  savePron([{add: {from: f, to: t}}]);
 };
 $('pronExport').onclick = () => {
   const blob = new Blob([JSON.stringify({type: 'pdf-reader-pron', rules: pronRules}, null, 1)], {type: 'application/json'});
@@ -1267,13 +1368,14 @@ $('pronImport').onclick = () => $('pronFile').click();
 $('pronFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
   try {
-    const j = JSON.parse(await f.text());
-    const rules = (Array.isArray(j) ? j : j.rules || []).filter(r => r && r.from && r.to);
+    const rules = parsePronFile(JSON.parse(await f.text()));
     let n = 0;
-    for (const r of rules) { pronRules = pronRules.filter(x => x.from !== r.from); pronRules.push({from: String(r.from), to: String(r.to)}); n++; }
-    savePron(); alert('已匯入 ' + n + ' 筆讀音修正。');
+    for (const r of rules) { pronRules = pronRules.filter(x => x.from !== r.from); pronRules.push(r); n++; }
+    savePron(rules.map(r => ({add: r}))); alert('已匯入 ' + n + ' 筆讀音修正。');
   } catch(err){ alert('這個檔案不是讀音修正表。'); }
 };
+
+ghPull();
 
 $('helpBtn').onclick = () => $('help').classList.add('show');
 $('helpClose').onclick = () => $('help').classList.remove('show');
