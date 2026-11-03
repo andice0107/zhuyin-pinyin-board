@@ -165,7 +165,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/02-G）</span>
+  <span id="status">尚未開啟檔案（版本 11/03-A）</span>
   <span id="nowText"></span>
 </footer>
 <div id="markBar"><span>🙈 <b>標記不唸</b>：拖曳選字（iPad 按住再拖）就標記，再選一次取消</span><button class="btn primary" id="markDone">✔ 完成</button></div>
@@ -833,7 +833,9 @@ function canJoin(i){
   if (n2 && (n2.t === '、' || n2.t === '.' || n2.t === '．')) return false;
   return true;
 }
-function usable(c){ return !(S.skipZhuyin && c.zy) && !(c.hid && !S.readHidden) && !(c.box && !c.hid && S.skipBox); }
+// 格子裡的考題大字（寫注音的國字）留在文字流裡，才點得到、框得到；唸的時候預設略過，只有單獨選它時才唸
+function usable(c){ return !(S.skipZhuyin && c.zy) && !(c.hid && !S.readHidden); }
+function muted(c){ return c.skip || (c.box && !c.hid && S.skipBox); }
 function rebuildStream(){
   stream = []; sentences = [];
   let lineId = 0;
@@ -1138,9 +1140,12 @@ const R = {queue: [], idx: 0, playing: false, paused: false, token: 0, cont: fal
 
 function spokenOf(a, b){
   let s = '';
+  // 只選了格子大字本身（沒有其他字）→ 老師自己要聽，就唸出來
+  let onlyBox = true;
+  for (let i = a; i <= b; i++) { const c = stream[i]; if (!c.skip && !(c.box && !c.hid) && c.t.trim()) { onlyBox = false; break; } }
   for (let i = a; i <= b; i++) {
     const c = stream[i];
-    if (c.skip) { if (!s.endsWith(' ')) s += ' '; continue; }
+    if (c.skip || (!onlyBox && muted(c))) { if (!s.endsWith(' ')) s += ' '; continue; }
     s += c.t;
     if (i < b && c.sp) s += ' ';
   }
