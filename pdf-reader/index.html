@@ -165,7 +165,7 @@ kbd{border:1px solid #c5ccd6;border-bottom-width:2px;border-radius:4px;padding:0
   </div></div>
 </main>
 <footer>
-  <span id="status">尚未開啟檔案（版本 11/03-A）</span>
+  <span id="status">尚未開啟檔案（版本 11/05-A）</span>
   <span id="nowText"></span>
 </footer>
 <div id="markBar"><span>🙈 <b>標記不唸</b>：拖曳選字（iPad 按住再拖）就標記，再選一次取消</span><button class="btn primary" id="markDone">✔ 完成</button></div>
@@ -560,7 +560,10 @@ function markBoxChars(chars){
     if (c.s < 1.8 * med || !/\p{Script=Han}/u.test(c.t)) continue;
     const lone = !chars.some(o => o !== c && Math.abs(o.s - c.s) < 0.15 * c.s && /[\p{L}\p{N}]/u.test(o.t) &&
       Math.hypot(o.cx - c.cx, o.cy - c.cy) < 1.25 * c.s);
-    c.box = lone;
+    // 旁邊緊鄰一個更大的字（寫國字題的答案格、或寫注音題的目標字），這個字只是語詞裡的提示字（例如「□絕」的「絕」），要唸
+    const helper = chars.some(o => o !== c && o.s > 1.2 * c.s && /\p{Script=Han}/u.test(o.t) &&
+      Math.hypot(o.cx - c.cx, o.cy - c.cy) < 2.5 * c.s);
+    c.box = lone && !helper;
   }
 }
 
@@ -577,10 +580,10 @@ function layoutLines(chars, dir){
   const lines = [];
   let cur = null;
   for (const c of sorted) {
-    if (cur && pos(c) - cur.mean <= 0.5 * Math.min(c.s, cur.s)) {
-      cur.chars.push(c); cur.sum += pos(c); cur.mean = cur.sum / cur.chars.length;
+    if (cur && pos(c) - cur.mean <= Math.max(0.5 * Math.min(c.s, cur.s), 0.35 * Math.max(c.s, cur.big))) {
+      cur.chars.push(c); cur.big = Math.max(cur.big, c.s); cur.sum += pos(c); cur.mean = cur.sum / cur.chars.length;
     } else {
-      cur = {chars: [c], sum: pos(c), mean: pos(c), s: c.s};
+      cur = {chars: [c], sum: pos(c), mean: pos(c), s: c.s, big: c.s};
       lines.push(cur);
     }
   }
@@ -641,8 +644,8 @@ function clusterLines(chars, dir){
   const lines = [];
   let cur = null;
   for (const c of sorted) {
-    if (cur && pos(c) - cur.mean <= 0.5 * Math.min(c.s, cur.s)) { cur.chars.push(c); cur.sum += pos(c); cur.mean = cur.sum / cur.chars.length; }
-    else { cur = {chars: [c], sum: pos(c), mean: pos(c), s: c.s}; lines.push(cur); }
+    if (cur && pos(c) - cur.mean <= Math.max(0.5 * Math.min(c.s, cur.s), 0.35 * Math.max(c.s, cur.big))) { cur.chars.push(c); cur.big = Math.max(cur.big, c.s); cur.sum += pos(c); cur.mean = cur.sum / cur.chars.length; }
+    else { cur = {chars: [c], sum: pos(c), mean: pos(c), s: c.s, big: c.s}; lines.push(cur); }
   }
   for (const ln of lines) { ln.chars.sort((a, b) => along(a) - along(b)); ln.s = median(ln.chars.map(c => c.s)); ln.pos = ln.mean; }
   return lines;
@@ -680,6 +683,16 @@ function splitRegion(chars, dir, depth){
     if (!straddle && L.length && Rr.length && /^[0-9０-９]$/.test(L[L.length - 1].t)) {
       const a = hi(L[L.length - 1]), b = lo(Rr[0]);
       if (ln.chars.some(c => (c.t === '.' || c.t === '．') && lo(c) >= a - 0.1 * ln.s && hi(c) <= b + 0.1 * ln.s && lo(c) - a < 0.5 * ln.s && b - hi(c) < 1.2 * ln.s)) straddle = true;
+    }
+    // 切在括號裡面（左邊有還沒關上的「（」，右邊的「）」就在附近）：例如「（每題1分，｜共8分）」，是同一行
+    if (!straddle && L.length && Rr.length) {
+      let open = 0;
+      for (const c of ln.chars) if (hi(c) <= P + 0.01) { if (OPEN_PAREN.has(c.t)) open++; else if (CLOSE_PAREN.has(c.t)) open = Math.max(0, open - 1); }
+      if (open) {
+        const right = ln.chars.filter(c => lo(c) > P).sort((a, b) => along(a) - along(b)).slice(0, 8);
+        const k = right.findIndex(c => CLOSE_PAREN.has(c.t) || OPEN_PAREN.has(c.t));
+        if (k >= 0 && CLOSE_PAREN.has(right[k].t)) straddle = true;
+      }
     }
     return {L, Rr, straddle};
   };
@@ -818,7 +831,37 @@ function orderChars(chars, dir){
     const r = layoutLines(region, dir);
     lines.push(...r.lines);
   }
-  return {order: lines.flatMap(l => l.chars), lines};
+  const ordered = gridRowMajor(lines);
+  return {order: ordered.flatMap(l => l.chars), lines: ordered};
+}
+// 表格式的題目（例如 4 欄 × 4 列，題號 1 2 3 4 / 5 6 7 8 …）會被當成 4 欄、一欄一欄往下讀（1 5 9 13 2 6…）。
+// 認出這種題號排法，改成照題號一格一格讀（1 2 3 4 5 …），每格的題目和下面的部件／選項跟著它
+function gridRowMajor(lines){
+  const numOf = ln => { const m = /^(\d{1,2})[.．]/.exec(ln.chars.slice(0, 4).map(c => c.t).join('')); return m ? +m[1] : null; };
+  const cells = [];   // {n, lines}
+  let head = [];
+  for (const ln of lines) {
+    const n = numOf(ln);
+    if (n !== null) cells.push({n, lines: [ln]});
+    else if (cells.length) cells[cells.length - 1].lines.push(ln);
+    else head.push(ln);
+  }
+  if (cells.length < 4) return lines;
+  const out = cells.slice();
+  for (let i = 0; i < out.length; i++) {
+    let found = null;
+    for (let d = 2; d <= 6 && !found; d++) for (let m = Math.floor((out.length - i) / d); m >= 2 && !found; m--) {
+      const n0 = out[i].n; let ok = true;
+      for (let j = 0; j < d && ok; j++) for (let k = 0; k < m && ok; k++) if (out[i + j * m + k].n !== n0 + k * d + j) ok = false;
+      if (ok) found = {d, m};
+    }
+    if (!found) continue;
+    const {d, m} = found, run = out.slice(i, i + d * m), rm = [];
+    for (let k = 0; k < m; k++) for (let j = 0; j < d; j++) rm.push(run[j * m + k]);
+    out.splice(i, d * m, ...rm);
+    i += d * m - 1;
+  }
+  return head.concat(out.flatMap(c => c.lines));
 }
 
 // 段落／區塊交界處，如果前後都是國字、字一樣大、下一行也不是題號，多半是同一句被框框或分區切開，接起來讀
